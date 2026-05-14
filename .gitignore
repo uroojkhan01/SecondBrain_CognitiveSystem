@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment files (secrets)
+.env
+
+# Logs
+*.log
+logs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local app data (voice notes / temp conversions)
+tmp/
+media/
+
+# Local database (only if you use SQLite during dev)
+*.sqlite3
+*.db
