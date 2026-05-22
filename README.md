@@ -16,7 +16,7 @@ The application uses:
 
 Users can:
 
-* log memories and events
+* log memories and events                                                                                                                                                                                                                                                                                                                                                          
 * ask recall-based questions
 * retrieve summaries and past activities
 * organize information through natural language

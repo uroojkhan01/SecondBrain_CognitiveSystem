@@ -15,3 +15,9 @@
 # notion-client==2.2.1
 
 # faster-whisper==1.0.3
+
+
+pandas
+scikit-learn
+joblib
+python-telegram-bot
