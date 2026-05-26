@@ -26,7 +26,9 @@ async def telegram_webhook(request: Request):
 
     # Save user to JSON
     save_user(chat_id, first_name, username)
+    print(f"Current users: {load_users()}")
 
+    
     if not is_notion_connected(chat_id):
         oauth_url = get_oauth_url(chat_id)
         await send_message(
@@ -85,6 +87,7 @@ async def notion_oauth_callback(request: Request):
         chat_id,
         "✅ Notion connected successfully!\n\nYou can now send me tasks!"
     )
+    print(f"Current users: {load_users()}")
 
     return HTMLResponse("""
         <html>
