@@ -46,7 +46,10 @@ async def telegram_webhook(request: Request):
 
 async def notion_oauth_callback(request: Request):
     code = request.query_params.get("code")
-    chat_id = request.query_params.get("state")
+    state = request.query_params.get("state")
+
+    # Strip tg_ prefix to get real chat_id
+    chat_id = state.replace("tg_", "") if state else None
 
     if not code or not chat_id:
         return {"error": "Missing code or state"}
@@ -74,7 +77,7 @@ async def notion_oauth_callback(request: Request):
     users = load_users()
     if str(chat_id) not in users:
         users[str(chat_id)] = {}
-    users[str(chat_id)]["notion"] = {"token": access_token}
+    users[str(chat_id)]["notion"] = {"token": access_token, "database_id": None}
     save_users(users)
 
     # Notify user

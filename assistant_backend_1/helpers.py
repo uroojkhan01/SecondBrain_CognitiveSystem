@@ -7,10 +7,13 @@ from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, N
 USERS_FILE="user.json"
 
 
-def load_users(): #to store chat_id and notion database id for each users
+def load_users():
     if os.path.exists(USERS_FILE):
         with open(USERS_FILE, "r") as f:
-            return json.load(f)
+            content = f.read().strip()
+            if not content:
+                return {}
+            return json.loads(content)
     return {}
 
 
@@ -49,7 +52,7 @@ def get_oauth_url(chat_id: str) -> str:
         f"&response_type=code"
         f"&owner=user"
         f"&redirect_uri={NOTION_REDIRECT_URI}"
-        f"&state={str(chat_id)}"  
+        f"&state=tg_{str(chat_id)}"  # ← added tg_ prefix
     )
 
 
