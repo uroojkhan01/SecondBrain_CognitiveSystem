@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from SecondBrain_CognitiveSystem.assistant_backend_1.helpers import load_users
+from assistant_backend_1.helpers import load_users
 from assistant_backend_1.api.handlers.telegram_handler import telegram_webhook,notion_oauth_callback
 
 #remove this function when switching to a real database, it's just for debugging purposes to see the users saved in the JSON file
