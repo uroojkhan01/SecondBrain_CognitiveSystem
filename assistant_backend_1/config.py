@@ -9,3 +9,6 @@ if os.path.exists(".env"):
 # now we have them as a handy python strings!
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_BOT_USERNAME = os.getenv('TELEGRAM_BOT_USERNAME')
+NOTION_CLIENT_ID = os.getenv('NOTION_CLIENT_ID')
+NOTION_CLIENT_SECRET = os.getenv('NOTION_CLIENT_SECRET')
+NOTION_REDIRECT_URI = os.getenv('NOTION_REDIRECT_URI')
