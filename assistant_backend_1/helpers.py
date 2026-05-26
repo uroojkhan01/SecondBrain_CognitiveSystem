@@ -63,9 +63,9 @@ def is_notion_connected(chat_id: str) -> bool:
     return bool(notion.get("token"))  # ← only check token, not database_id
 
 
-def has_notion_token(chat_id: str) -> bool:
-    """Check if user has token but maybe no database selected"""
+def is_notion_connected(chat_id: str) -> bool:
     users = load_users()
     user = users.get(str(chat_id), {})
-    return bool(user.get("notion", {}).get("token"))
+    notion = user.get("notion", {})
+    return bool(notion.get("token"))  # only check token
 

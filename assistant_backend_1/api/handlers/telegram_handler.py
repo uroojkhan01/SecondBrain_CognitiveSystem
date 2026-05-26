@@ -73,7 +73,7 @@ async def notion_oauth_callback(request: Request):
         await send_message(chat_id, "❌ Failed to connect Notion. Please try again.")
         return {"error": "Failed to get token"}
 
-    # ← Fetch databases and save first one
+    # Fetch all databases user gave access to
     db_response = requests.post(
         "https://api.notion.com/v1/search",
         headers={
@@ -85,29 +85,58 @@ async def notion_oauth_callback(request: Request):
     )
 
     databases = db_response.json().get("results", [])
-    database_id = databases[0]["id"] if databases else None
-    print(f"Found databases: {[db['id'] for db in databases]}")
+    print(f"Found {len(databases)} databases")
 
-    # Save token AND database_id
+    # Build database list
+    database_list = []
+    for db in databases:
+        try:
+            db_name = db["title"][0]["text"]["content"]
+        except:
+            db_name = "Untitled"
+        database_list.append({
+            "id": db["id"],
+            "name": db_name
+        })
+
+    # Save token and databases
     users = load_users()
     if str(chat_id) not in users:
         users[str(chat_id)] = {}
+
     users[str(chat_id)]["notion"] = {
         "token": access_token,
-        "database_id": database_id  # ← now saved
+        "active_database_id": database_list[0]["id"] if database_list else None,
+        "database_ids": database_list
     }
     save_users(users)
 
-    await send_message(
-        chat_id,
-        "✅ Notion connected successfully!\n\nYou can now send me tasks!"
-    )
+    # Notify user
+    if len(database_list) > 1:
+        db_options = "\n".join([
+            f"{i+1}. {db['name']}" for i, db in enumerate(database_list)
+        ])
+        await send_message(
+            chat_id,
+            f"✅ Notion connected!\n\n"
+            f"📚 Found {len(database_list)} databases:\n\n"
+            f"{db_options}\n\n"
+            f"Reply with the number to select one.\n"
+            f"Currently using: *{database_list[0]['name']}*"
+        )
+    else:
+        await send_message(
+            chat_id,
+            f"✅ Notion connected!\n\n"
+            f"📚 Using: *{database_list[0]['name'] if database_list else 'No database found'}*\n\n"
+            f"You can now send me tasks!"
+        )
 
     return HTMLResponse("""
         <html>
         <body style="font-family: sans-serif; text-align: center; padding: 50px;">
             <h2>✅ Notion Connected!</h2>
-            <p>Go back to Telegram and start sending tasks!</p>
+            <p>Go back to Telegram to select your database.</p>
         </body>
         </html>
     """)
