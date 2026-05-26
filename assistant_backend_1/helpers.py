@@ -57,11 +57,10 @@ def get_oauth_url(chat_id: str) -> str:
 
 
 def is_notion_connected(chat_id: str) -> bool:
-    """Check if user has connected Notion"""
     users = load_users()
     user = users.get(str(chat_id), {})
     notion = user.get("notion", {})
-    return bool(notion.get("token") and notion.get("database_id"))
+    return bool(notion.get("token"))  # ← only check token, not database_id
 
 
 def has_notion_token(chat_id: str) -> bool:

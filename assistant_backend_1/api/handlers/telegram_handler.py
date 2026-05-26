@@ -49,8 +49,6 @@ async def telegram_webhook(request: Request):
 async def notion_oauth_callback(request: Request):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
-
-    # Strip tg_ prefix to get real chat_id
     chat_id = state.replace("tg_", "") if state else None
 
     if not code or not chat_id:
@@ -75,19 +73,35 @@ async def notion_oauth_callback(request: Request):
         await send_message(chat_id, "❌ Failed to connect Notion. Please try again.")
         return {"error": "Failed to get token"}
 
-    # Save token to users.json
+    # ← Fetch databases and save first one
+    db_response = requests.post(
+        "https://api.notion.com/v1/search",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        },
+        json={"filter": {"value": "database", "property": "object"}}
+    )
+
+    databases = db_response.json().get("results", [])
+    database_id = databases[0]["id"] if databases else None
+    print(f"Found databases: {[db['id'] for db in databases]}")
+
+    # Save token AND database_id
     users = load_users()
     if str(chat_id) not in users:
         users[str(chat_id)] = {}
-    users[str(chat_id)]["notion"] = {"token": access_token, "database_id": None}
+    users[str(chat_id)]["notion"] = {
+        "token": access_token,
+        "database_id": database_id  # ← now saved
+    }
     save_users(users)
 
-    # Notify user
     await send_message(
         chat_id,
         "✅ Notion connected successfully!\n\nYou can now send me tasks!"
     )
-    print(f"Current users: {load_users()}")
 
     return HTMLResponse("""
         <html>
@@ -97,5 +111,4 @@ async def notion_oauth_callback(request: Request):
         </body>
         </html>
     """)
-
 
