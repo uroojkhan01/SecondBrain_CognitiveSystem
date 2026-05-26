@@ -42,15 +42,14 @@ def save_user(chat_id: str, first_name: str = None, username: str = None):
         print(f"👤 Existing user: {chat_id}")
 
 
-def get_notion_oauth_url(chat_id: str) -> str:
-    """Build Notion OAuth URL with chat_id as state"""
+def get_oauth_url(chat_id: str) -> str:
     return (
         f"https://api.notion.com/v1/oauth/authorize"
         f"?client_id={NOTION_CLIENT_ID}"
         f"&response_type=code"
         f"&owner=user"
         f"&redirect_uri={NOTION_REDIRECT_URI}"
-        f"&state={chat_id}"
+        f"&state={str(chat_id)}"  
     )
 
 

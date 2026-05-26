@@ -1,6 +1,6 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
-from assistant_backend_1.helpers import save_user,get_notion_oauth_url, load_users, save_users,is_notion_connected 
+from assistant_backend_1.helpers import save_user,get_oauth_url, load_users, save_users,is_notion_connected 
 import requests
 from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
 from fastapi.responses import HTMLResponse
@@ -19,7 +19,7 @@ async def telegram_webhook(request: Request):
         return {"status": "ignored"}
 
 
-    chat_id = message["chat"]["id"]
+    chat_id = str(message["chat"]["id"])
     first_name = message["chat"].get("first_name")
     username = message["chat"].get("username")
     text = message.get("text", "")
@@ -28,7 +28,7 @@ async def telegram_webhook(request: Request):
     save_user(chat_id, first_name, username)
 
     if not is_notion_connected(chat_id):
-        oauth_url = get_notion_oauth_url(chat_id)
+        oauth_url = get_oauth_url(chat_id)
         await send_message(
             chat_id,
             f"👋 Welcome! Please connect your Notion account to get started:\n\n"
