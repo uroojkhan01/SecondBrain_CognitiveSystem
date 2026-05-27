@@ -24,3 +24,5 @@ scikit-learn
 joblib
 httpx
 requests
+faster-whisper
+python-multipart
