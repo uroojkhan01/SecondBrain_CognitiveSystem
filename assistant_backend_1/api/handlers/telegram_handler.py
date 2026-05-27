@@ -67,6 +67,6 @@ async def telegram_webhook(request: Request):
         return {"status": "ok"}
 
     # Notion is connected — handle message normally
-    await send_message(chat_id, f"You said: {text}")
+    await send_message(chat_id, reply)
     return {"status": "ok"}
    
