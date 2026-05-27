@@ -16,9 +16,11 @@ def transcribe_audio_file(local_file_path: str) -> str:
         return "Audio file missing."
 
     try:
+        print("now in transcribe audio")
         segments, info = model.transcribe(
             local_file_path, beam_size=1)  # beam_size=1 is faster
         transcript = "".join([segment.text for segment in segments]).strip()
+        print("this is trancript", transcript)
         return transcript
     except Exception as e:
         print(f"Error: {e}")
