@@ -23,3 +23,5 @@ pandas
 scikit-learn
 joblib
 httpx
+faster-whisper
+python-multipart
