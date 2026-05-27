@@ -1,4 +1,7 @@
 from fastapi import Request
+from assistant_backend_1.features_services.telegram import send_message
+from assistant_backend_1.helpers import save_user,get_oauth_url, load_users,is_notion_connected 
+
 from assistant_backend_1.features_services.telegram import (
     send_message,
     process_voice_message
@@ -17,8 +20,6 @@ async def telegram_webhook(request: Request):
 
     if not message:
         return {"status": "ignored"}
-
-    chat_id = message["chat"]["id"]
 
     if "voice" in message:
 
@@ -46,6 +47,26 @@ async def telegram_webhook(request: Request):
 
         reply = f"You said: {text}"
 
-    await send_message(chat_id, reply)
+    chat_id = str(message["chat"]["id"])
+    first_name = message["chat"].get("first_name")
+    username = message["chat"].get("username")
+    text = message.get("text", "")
 
+    # Save user to JSON
+    save_user(chat_id, first_name, username)
+    print(f"Current users: {load_users()}")
+
+    
+    if not is_notion_connected(chat_id):
+        oauth_url = get_oauth_url(chat_id)
+        await send_message(
+            chat_id,
+            f"👋 Welcome! Please connect your Notion account to get started:\n\n"
+            f"🔗 {oauth_url}"
+        )
+        return {"status": "ok"}
+
+    # Notion is connected — handle message normally
+    await send_message(chat_id, f"You said: {text}")
     return {"status": "ok"}
+   
