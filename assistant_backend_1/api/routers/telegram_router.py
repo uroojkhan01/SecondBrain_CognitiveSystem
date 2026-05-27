@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from assistant_backend_1.helpers import load_users
-from assistant_backend_1.api.handlers.telegram_handler import telegram_webhook,notion_oauth_callback
+from assistant_backend_1.api.handlers.telegram_handler import telegram_webhook
+from assistant_backend_1.api.handlers.notion_handler import notion_oauth_callback
 
 #remove this function when switching to a real database, it's just for debugging purposes to see the users saved in the JSON file
 async def debug_users():  
