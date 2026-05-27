@@ -26,3 +26,5 @@ httpx
 requests
 faster-whisper
 python-multipart
+pytz
+schedule
