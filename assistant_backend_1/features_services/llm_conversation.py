@@ -2,7 +2,7 @@ import json
 from groq import Groq
 from assistant_backend_1.config import GROQ_API_KEY
 from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT
-from assistant_backend_1.models import LLMResponse
+from assistant_backend_1.models.llmresponse import LLMResponse
 
 client = Groq(api_key=GROQ_API_KEY)
 
