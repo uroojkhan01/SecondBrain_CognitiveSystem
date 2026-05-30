@@ -27,3 +27,4 @@ requests
 faster-whisper
 python-multipart
 groq
+neo4j

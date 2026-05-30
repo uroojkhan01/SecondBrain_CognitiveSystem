@@ -1,45 +1,127 @@
 import json
 from groq import Groq
 from assistant_backend_1.config import GROQ_API_KEY
-from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT
+from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT, NEO4J_CONTEXT_PROMPT
 from assistant_backend_1.models.llmresponse import LLMResponse
+from assistant_backend_1.features_services.memory_journal import (
+    get_user_context,
+    save_memory,
+    save_reminder,
+    save_task,
+    save_habit,
+    mark_task_done,
+    update_entity
+)
 
 client = Groq(api_key=GROQ_API_KEY)
 
 conversation_histories: dict[str, list] = {}
 
+INTENTS_TO_SKIP_SAVING = {"conversation", "vent", "daily_brief", "panic_mode"}
+
+
+def build_system_prompt(chat_id: str) -> str:
+    """Build enriched system prompt with Neo4j context for this user."""
+    context = get_user_context(chat_id)
+    context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
+    return f"{CLASSIFIER_SYSTEM_PROMPT}\n\n{context_block}"
+
+
+def handle_brain_dump(chat_id: str, items: list):
+    """Handle multiple intents extracted from a brain dump."""
+    for item in items:
+        intent = item.get("intent")
+        if intent == "create_task" and item.get("task"):
+            save_task(chat_id, item["task"].get(
+                "title"), item["task"].get("due"))
+        elif intent == "set_reminder" and item.get("reminder"):
+            save_reminder(chat_id, item["reminder"].get(
+                "text"), item["reminder"].get("datetime"))
+        elif intent == "save_memory" and item.get("memory_summary"):
+            save_memory(chat_id, item["memory_summary"],
+                        item.get("entities", []))
+
+
+def route_intent(chat_id: str, llm_response: LLMResponse):
+    """Route LLM response to the correct Neo4j save function based on intent."""
+
+    intent = llm_response.intent
+
+    if intent in INTENTS_TO_SKIP_SAVING:
+        return
+
+    elif intent == "save_memory":
+        if llm_response.memory_summary:
+            save_memory(chat_id, llm_response.memory_summary,
+                        llm_response.entities)
+
+    elif intent == "set_reminder":
+        if llm_response.reminder:
+            save_reminder(
+                chat_id,
+                llm_response.reminder.get("text"),
+                llm_response.reminder.get("datetime")
+            )
+
+    elif intent == "create_task":
+        if llm_response.task:
+            save_task(
+                chat_id,
+                llm_response.task.get("title"),
+                llm_response.task.get("due")
+            )
+
+    elif intent == "habit_track":
+        if llm_response.habit:
+            save_habit(
+                chat_id,
+                llm_response.habit.get("name"),
+                llm_response.habit.get("value")
+            )
+
+    elif intent == "mark_done":
+        if llm_response.task:
+            mark_task_done(chat_id, llm_response.task.get("title"))
+
+    elif intent == "update_memory":
+        if llm_response.entities:
+            update_entity(chat_id, llm_response.entities)
+
+    elif intent == "brain_dump":
+        if llm_response.items:
+            handle_brain_dump(chat_id, llm_response.items)
+
 
 def process_user_input(chat_id: str, user_input: str) -> str:
     """
     Takes user message, runs it through Groq LLM,
-    classifies intent, extracts data, returns reply string for Telegram.
+    classifies intent, saves to Neo4j, returns reply for Telegram.
     """
 
-    # Build or retrieve conversation history for this user
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = []
 
     history = conversation_histories[chat_id]
-
-    # Add user message to history
     history.append({"role": "user", "content": user_input})
 
     try:
+        # Build prompt enriched with Neo4j long term memory
+        system_prompt = build_system_prompt(chat_id)
+
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},  # forces valid JSON
-            temperature=0.2,                           # consistent, reliable output
+            response_format={"type": "json_object"},
+            temperature=0.2,
             max_tokens=1024,
             messages=[
-                {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
-                *history                               # full conversation context
+                {"role": "system", "content": system_prompt},
+                *history
             ]
         )
 
         raw = response.choices[0].message.content
         data = json.loads(raw)
 
-        # Parse into model
         llm_response = LLMResponse(
             intent=data.get("intent", "conversation"),
             reply_to_user=data.get("reply_to_user", "I'm here, tell me more."),
@@ -47,13 +129,15 @@ def process_user_input(chat_id: str, user_input: str) -> str:
             entities=data.get("entities", []),
             follow_up_question=data.get("follow_up_question"),
             reminder=data.get("reminder"),
-            task=data.get("task")
+            task=data.get("task"),
+            habit=data.get("habit"),
+            items=data.get("items", [])
         )
 
-        # Add assistant reply to history
+        # Save assistant reply to history
         history.append({"role": "assistant", "content": raw})
 
-        # Keep history manageable (last 20 messages)
+        # Trim history
         if len(history) > 20:
             conversation_histories[chat_id] = history[-20:]
 
@@ -62,8 +146,9 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         print(f"[LLM] Entities: {llm_response.entities}")
         print(f"[LLM] Memory: {llm_response.memory_summary}")
 
-        # For now — just return the reply to user
-        # Later: route to reminder/memory/notion services based on intent
+        # Route to Neo4j
+        route_intent(chat_id, llm_response)
+
         return llm_response.reply_to_user
 
     except json.JSONDecodeError as e:
