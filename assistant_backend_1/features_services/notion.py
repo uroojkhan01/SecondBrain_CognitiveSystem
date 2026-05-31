@@ -2,7 +2,8 @@
 
 import requests
 import pytz
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from assistant_backend_1.helpers import load_users
 
 
@@ -44,12 +45,66 @@ def get_notion_workspace_timezone(token: str, database_id: str) -> str:
     return "UTC"
 
 
+def parse_relative_time(due_str: str) -> str:
+    """
+    Convert relative time strings to absolute datetime.
+    If not relative, return as is.
+    """
+    now = datetime.now()
+    due_str_lower = due_str.lower().strip()
+
+    # "in X minutes"
+    match = re.match(r"in (\d+) minutes?", due_str_lower)
+    if match:
+        mins = int(match.group(1))
+        result = (now + timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%S")
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    # "in X hours"
+    match = re.match(r"in (\d+) hours?", due_str_lower)
+    if match:
+        hours = int(match.group(1))
+        result = (now + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    # "in X days"
+    match = re.match(r"in (\d+) days?", due_str_lower)
+    if match:
+        days = int(match.group(1))
+        result = (now + timedelta(days=days)).strftime("%Y-%m-%d")
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    # "tomorrow"
+    if "tomorrow" in due_str_lower:
+        result = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    # "tonight"
+    if "tonight" in due_str_lower:
+        result = now.strftime("%Y-%m-%d") + "T21:00:00"
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    # "next week"
+    if "next week" in due_str_lower:
+        result = (now + timedelta(weeks=1)).strftime("%Y-%m-%d")
+        print(f"⏱ Relative time '{due_str}' → {result}")
+        return result
+
+    return due_str  # not relative — return as is
+
+
 def format_due_date_for_notion(due_str: str, token: str = None, database_id: str = None) -> str:
     """
     Convert LLM due string to Notion-compatible format.
+    - Handles relative times like 'in 15 minutes'
     - If datetime has no timezone → fetch from Notion and apply
     - If datetime has timezone → use as is
-    - If date only → use as is
+    - If date only → apply midnight in user's timezone
     - If None → return None
     """
     if not due_str:
@@ -57,11 +112,14 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
 
     due_str = due_str.strip()
 
+    # Try to parse relative time first
+    due_str = parse_relative_time(due_str)
+
     try:
         if "T" in due_str:
             dt = datetime.fromisoformat(due_str)
 
-            # No timezone info → fetch from Notion and apply
+            # No timezone → fetch from Notion and apply
             if dt.tzinfo is None and token and database_id:
                 tz_name = get_notion_workspace_timezone(token, database_id)
                 tz = pytz.timezone(tz_name)
@@ -73,8 +131,16 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
             return due_str
 
         elif len(due_str) == 10 and due_str.count("-") == 2:
-            # Date only — no timezone needed
-            return due_str
+            # Date only → apply midnight in user's timezone
+            if token and database_id:
+                tz_name = get_notion_workspace_timezone(token, database_id)
+                tz = pytz.timezone(tz_name)
+                dt = datetime.strptime(due_str, "%Y-%m-%d")
+                dt = tz.localize(dt.replace(hour=0, minute=0, second=0))
+                print(f"📅 Date-only → midnight in {tz_name}: {dt.isoformat()}")
+                return dt.isoformat()
+
+            return due_str  # fallback if no credentials
 
         else:
             print(f"⚠️ Unrecognized date format: {due_str}")

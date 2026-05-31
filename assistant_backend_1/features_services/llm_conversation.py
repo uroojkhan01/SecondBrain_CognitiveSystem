@@ -28,7 +28,14 @@ def build_system_prompt(chat_id: str) -> str:
     """Build enriched system prompt with Neo4j context for this user."""
     context = get_user_context(chat_id)
     context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
-    return f"{CLASSIFIER_SYSTEM_PROMPT}\n\n{context_block}"
+    
+    # ← Add current time so LLM can calculate relative times
+    from datetime import datetime
+    current_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    
+    time_block = f"\nCurrent date and time is: {current_time}\nUse this to calculate relative times like 'in 15 minutes', 'tomorrow', 'next Monday' etc.\n"
+    
+    return f"{CLASSIFIER_SYSTEM_PROMPT}{time_block}\n\n{context_block}"
 
 
 def handle_brain_dump(chat_id: str, items: list):
