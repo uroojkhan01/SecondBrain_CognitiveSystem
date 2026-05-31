@@ -30,12 +30,14 @@ def get_notion_workspace_timezone(token: str, database_id: str) -> str:
     try:
         response = requests.get(url, headers=headers)
         data = response.json()
+        print(f"🔍 Full Notion DB response: {data}")
         tz = (
             data.get("properties", {})
                 .get("Due date", {})
                 .get("date", {})
                 .get("time_zone")
         )
+        
         if tz:
             print(f"🌍 Notion timezone: {tz}")
             return tz
@@ -111,9 +113,10 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
         return None
 
     due_str = due_str.strip()
-
+    print(f"🔍 Input due_str: {due_str}")
     # Try to parse relative time first
     due_str = parse_relative_time(due_str)
+    print(f"🔍 After parse_relative_time: {due_str}")
 
     try:
         if "T" in due_str:
@@ -125,6 +128,7 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
                 tz = pytz.timezone(tz_name)
                 dt = tz.localize(dt)
                 print(f"🕒 Applied timezone {tz_name} → {dt.isoformat()}")
+                print(f"🔍 Final formatted: {dt.isoformat()}")
                 return dt.isoformat()
 
             # Already has timezone → use as is
@@ -145,6 +149,7 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
         else:
             print(f"⚠️ Unrecognized date format: {due_str}")
             return None
+    
 
     except Exception as e:
         print(f"❌ Error formatting date: {e}")
