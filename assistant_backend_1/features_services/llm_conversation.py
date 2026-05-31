@@ -12,6 +12,10 @@ from assistant_backend_1.features_services.memory_journal import (
     mark_task_done,
     update_entity
 )
+from assistant_backend_1.features_services.notion import (
+    save_task_to_notion,
+    save_reminder_to_notion
+)
 
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -57,7 +61,14 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "set_reminder":
         if llm_response.reminder:
+            # Save to Neo4j
             save_reminder(
+                chat_id,
+                llm_response.reminder.get("text"),
+                llm_response.reminder.get("datetime")
+            )
+            # ← Also save to Notion
+            save_reminder_to_notion(
                 chat_id,
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
@@ -65,7 +76,14 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "create_task":
         if llm_response.task:
+            # Save to Neo4j
             save_task(
+                chat_id,
+                llm_response.task.get("title"),
+                llm_response.task.get("due")
+            )
+            # ← Also save to Notion
+            save_task_to_notion(
                 chat_id,
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
