@@ -101,60 +101,42 @@ def parse_relative_time(due_str: str) -> str:
 
 
 def format_due_date_for_notion(due_str: str, token: str = None, database_id: str = None) -> str:
-    """
-    Convert LLM due string to Notion-compatible format.
-    - Handles relative times like 'in 15 minutes'
-    - If datetime has no timezone → fetch from Notion and apply
-    - If datetime has timezone → use as is
-    - If date only → apply midnight in user's timezone
-    - If None → return None
-    """
     if not due_str:
         return None
 
     due_str = due_str.strip()
-    print(f"🔍 Input due_str: {due_str}")
-    # Try to parse relative time first
     due_str = parse_relative_time(due_str)
-    print(f"🔍 After parse_relative_time: {due_str}")
 
     try:
         if "T" in due_str:
             dt = datetime.fromisoformat(due_str)
 
-            # No timezone → fetch from Notion and apply
-            if dt.tzinfo is None and token and database_id:
-                tz_name = get_notion_workspace_timezone(token, database_id)
-                tz = pytz.timezone(tz_name)
-                dt = tz.localize(dt)
-                print(f"🕒 Applied timezone {tz_name} → {dt.isoformat()}")
-                print(f"🔍 Final formatted: {dt.isoformat()}")
+            # If already has timezone offset → use directly, no conversion
+            if dt.tzinfo is not None:
+                print(f"✅ Already has timezone: {dt.isoformat()}")
                 return dt.isoformat()
 
-            # Already has timezone → use as is
-            return due_str
+            # No timezone → fallback to Berlin
+            print(f"⚠️ No timezone in string, applying Berlin fallback")
+            tz = pytz.timezone("Europe/Berlin")
+            dt = tz.localize(dt)
+            return dt.isoformat()
 
         elif len(due_str) == 10 and due_str.count("-") == 2:
-            # Date only → apply midnight in user's timezone
-            if token and database_id:
-                tz_name = get_notion_workspace_timezone(token, database_id)
-                tz = pytz.timezone(tz_name)
-                dt = datetime.strptime(due_str, "%Y-%m-%d")
-                dt = tz.localize(dt.replace(hour=0, minute=0, second=0))
-                print(f"📅 Date-only → midnight in {tz_name}: {dt.isoformat()}")
-                return dt.isoformat()
-
-            return due_str  # fallback if no credentials
+            # Date only → midnight Berlin
+            tz = pytz.timezone("Europe/Berlin")
+            dt = datetime.strptime(due_str, "%Y-%m-%d")
+            dt = tz.localize(dt.replace(hour=0, minute=0, second=0))
+            print(f"📅 Date-only → midnight Berlin: {dt.isoformat()}")
+            return dt.isoformat()
 
         else:
             print(f"⚠️ Unrecognized date format: {due_str}")
             return None
-    
 
     except Exception as e:
         print(f"❌ Error formatting date: {e}")
         return None
-
 
 def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
     """Save a task to user's Notion database"""
