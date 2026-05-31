@@ -28,3 +28,5 @@ faster-whisper
 python-multipart
 pytz
 schedule
+groq
+neo4j
