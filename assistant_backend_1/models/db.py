@@ -45,6 +45,11 @@ def set_notion_connected(user_id: str, connected: bool) -> dict:
     ).eq("id", user_id).execute()
     return result.data[0]
 
+def save_notion_token(user_id: str, token: str) -> dict:
+    result = db.table("users").update(
+        {"notion_access_token": token}
+    ).eq("id", user_id).execute()
+    return result.data[0]
 
 # notion_databases
 
