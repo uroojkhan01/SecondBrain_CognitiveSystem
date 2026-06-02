@@ -3,20 +3,52 @@ from assistant_backend_1.config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
 
+# Generic relation words that are NOT real names — skip as entity nodes
+GENERIC_WORDS = {
+    "son", "daughter", "mom", "dad", "mother", "father", "sister", "brother",
+    "friend", "colleague", "boss", "doctor", "therapist", "teacher", "neighbor",
+    "husband", "wife", "partner", "grandfather", "grandmother", "uncle", "aunt",
+    "cousin", "nephew", "niece", "manager", "coworker", "classmate"
+}
+
 
 def get_session():
     return driver.session()
 
 
+# ─── User ─────────────────────────────────────────────────────────
+
+def save_or_update_user(chat_id: str, first_name: str, username: str):
+    """Create or update user node with Telegram info."""
+    with get_session() as session:
+        session.run(
+            """
+            MERGE (u:User {chat_id: $chat_id})
+            SET u.first_name = $first_name,
+                u.username = $username,
+                u.updated_at = datetime()
+            """,
+            chat_id=chat_id,
+            first_name=first_name or "",
+            username=username or ""
+        )
+
+
 # ─── Save Functions ───────────────────────────────────────────────
 
 def save_memory(chat_id: str, summary: str, entities: list) -> str:
+    """
+    Save a rich memory summary as the main memory node.
+    Entities are only saved if they have real proper names.
+    The summary is what the LLM reads to answer questions.
+    """
     with get_session() as session:
         session.run(
             "MERGE (u:User {chat_id: $chat_id})",
             chat_id=chat_id
         )
 
+        # Save the full memory summary — this is the core
         result = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})
@@ -29,24 +61,34 @@ def save_memory(chat_id: str, summary: str, entities: list) -> str:
         )
         memory_node_id = result.single()["node_id"]
 
+        # Save entities only if they have real proper names
         for entity in entities:
+            name = entity.get("name", "").strip()
+            if not name:
+                continue
+            if name.lower() in GENERIC_WORDS:
+                continue  # skip generic relation words
+
             session.run(
                 """
                 MATCH (u:User {chat_id: $chat_id})
-                MERGE (e:Entity {name: $name, type: $type, chat_id: $chat_id})
-                SET e.relation = $relation
+                MERGE (e:Entity {name: $name, chat_id: $chat_id})
+                SET e.type = $type,
+                    e.relation = $relation,
+                    e.updated_at = datetime()
                 MERGE (u)-[:KNOWS]->(e)
                 """,
                 chat_id=chat_id,
-                name=entity.get("name"),
-                type=entity.get("type"),
-                relation=entity.get("relation")
+                name=name,
+                type=entity.get("type", "person"),
+                relation=entity.get("relation", "")
             )
 
         return memory_node_id
 
 
 def save_reminder(chat_id: str, text: str, remind_at: str) -> str:
+    """Save a reminder node linked to the user."""
     with get_session() as session:
         session.run(
             "MERGE (u:User {chat_id: $chat_id})",
@@ -55,7 +97,12 @@ def save_reminder(chat_id: str, text: str, remind_at: str) -> str:
         result = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})
-            CREATE (r:Reminder {text: $text, remind_at: $remind_at, created_at: datetime()})
+            CREATE (r:Reminder {
+                text: $text,
+                remind_at: $remind_at,
+                is_sent: false,
+                created_at: datetime()
+            })
             CREATE (u)-[:SET]->(r)
             RETURN elementId(r) as node_id
             """,
@@ -67,6 +114,7 @@ def save_reminder(chat_id: str, text: str, remind_at: str) -> str:
 
 
 def save_task(chat_id: str, title: str, due: str) -> str:
+    """Save a task node linked to the user."""
     with get_session() as session:
         session.run(
             "MERGE (u:User {chat_id: $chat_id})",
@@ -75,7 +123,12 @@ def save_task(chat_id: str, title: str, due: str) -> str:
         result = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})
-            CREATE (t:Task {title: $title, due: $due, status: 'pending', created_at: datetime()})
+            CREATE (t:Task {
+                title: $title,
+                due: $due,
+                status: 'pending',
+                created_at: datetime()
+            })
             CREATE (u)-[:CREATED]->(t)
             RETURN elementId(t) as node_id
             """,
@@ -87,6 +140,7 @@ def save_task(chat_id: str, title: str, due: str) -> str:
 
 
 def save_habit(chat_id: str, name: str, value: str) -> str:
+    """Save a habit log node linked to the user."""
     with get_session() as session:
         session.run(
             "MERGE (u:User {chat_id: $chat_id})",
@@ -109,6 +163,7 @@ def save_habit(chat_id: str, name: str, value: str) -> str:
 
 
 def mark_task_done(chat_id: str, title: str):
+    """Mark a matching task as done."""
     with get_session() as session:
         session.run(
             """
@@ -122,15 +177,21 @@ def mark_task_done(chat_id: str, title: str):
 
 
 def update_entity(chat_id: str, entities: list):
+    """Update existing named entity nodes."""
     with get_session() as session:
         for entity in entities:
+            name = entity.get("name", "").strip()
+            if not name or name.lower() in GENERIC_WORDS:
+                continue
             session.run(
                 """
                 MATCH (u:User {chat_id: $chat_id})-[:KNOWS]->(e:Entity {name: $name, chat_id: $chat_id})
-                SET e.relation = $relation, e.type = $type, e.updated_at = datetime()
+                SET e.relation = $relation,
+                    e.type = $type,
+                    e.updated_at = datetime()
                 """,
                 chat_id=chat_id,
-                name=entity.get("name"),
+                name=name,
                 type=entity.get("type"),
                 relation=entity.get("relation")
             )
@@ -139,9 +200,30 @@ def update_entity(chat_id: str, entities: list):
 # ─── Query Functions ───────────────────────────────────────────────
 
 def get_user_context(chat_id: str) -> str:
+    """
+    Pull everything known about this user as plain text.
+    Injected into LLM prompt so it can answer naturally.
+    The LLM does the reasoning — we just feed it the facts.
+    """
     with get_session() as session:
         lines = []
 
+        # ── Memories (most important — rich plain text summaries) ──
+        memories = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:REMEMBERS]->(m:Memory)
+            RETURN m.summary as summary
+            ORDER BY m.created_at DESC
+            LIMIT 30
+            """,
+            chat_id=chat_id
+        )
+        memory_lines = [r["summary"] for r in memories]
+        if memory_lines:
+            lines.append("Things this user has shared:")
+            lines.extend([f"  - {s}" for s in memory_lines])
+
+        # ── Named entities (only real proper names) ──
         entities = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})-[:KNOWS]->(e:Entity {chat_id: $chat_id})
@@ -149,27 +231,36 @@ def get_user_context(chat_id: str) -> str:
             """,
             chat_id=chat_id
         )
-        for record in entities:
-            name = record["name"]
-            relation = record["relation"]
-            etype = record["type"]
-            if relation:
-                lines.append(f"- {name} is this user's {relation} ({etype})")
+        entity_lines = []
+        for r in entities:
+            if r["relation"]:
+                entity_lines.append(
+                    f"  - {r['name']} is their {r['relation']}")
             else:
-                lines.append(f"- {name} ({etype}) was mentioned by this user")
+                entity_lines.append(f"  - {r['name']} was mentioned")
+        if entity_lines:
+            lines.append("People and places this user knows:")
+            lines.extend(entity_lines)
 
-        memories = session.run(
+        # ── Pending tasks ──
+        tasks = session.run(
             """
-            MATCH (u:User {chat_id: $chat_id})-[:REMEMBERS]->(m:Memory)
-            RETURN m.summary as summary
-            ORDER BY m.created_at DESC
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task {status: 'pending'})
+            RETURN t.title as title, t.due as due
+            ORDER BY t.created_at DESC
             LIMIT 10
             """,
             chat_id=chat_id
         )
-        for record in memories:
-            lines.append(f"- {record['summary']}")
+        task_lines = []
+        for r in tasks:
+            due = f" (due: {r['due']})" if r["due"] else ""
+            task_lines.append(f"  - {r['title']}{due}")
+        if task_lines:
+            lines.append("Pending tasks:")
+            lines.extend(task_lines)
 
+        # ── Reminders ──
         reminders = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
@@ -179,22 +270,30 @@ def get_user_context(chat_id: str) -> str:
             """,
             chat_id=chat_id
         )
-        for record in reminders:
-            lines.append(
-                f"- Reminder: {record['text']} at {record['remind_at']}")
+        reminder_lines = []
+        for r in reminders:
+            time = f" at {r['remind_at']}" if r["remind_at"] else ""
+            reminder_lines.append(f"  - {r['text']}{time}")
+        if reminder_lines:
+            lines.append("Reminders:")
+            lines.extend(reminder_lines)
 
-        tasks = session.run(
+        # ── Habits ──
+        habits = session.run(
             """
-            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task {status: 'pending'})
-            RETURN t.title as title, t.due as due
-            ORDER BY t.created_at DESC
+            MATCH (u:User {chat_id: $chat_id})-[:TRACKED]->(log:HabitLog)-[:OF]->(h:Habit)
+            RETURN h.name as name, log.value as value, log.logged_at as logged_at
+            ORDER BY log.logged_at DESC
             LIMIT 5
             """,
             chat_id=chat_id
         )
-        for record in tasks:
-            lines.append(
-                f"- Pending task: {record['title']} (due: {record['due']})")
+        habit_lines = []
+        for r in habits:
+            habit_lines.append(f"  - {r['name']}: {r['value']}")
+        if habit_lines:
+            lines.append("Recent habits tracked:")
+            lines.extend(habit_lines)
 
         if not lines:
             return "No previous information about this user yet."

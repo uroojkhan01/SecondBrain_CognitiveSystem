@@ -21,23 +21,25 @@ client = Groq(api_key=GROQ_API_KEY)
 
 conversation_histories: dict[str, list] = {}
 
-INTENTS_TO_SKIP_SAVING = {"conversation", "vent", "daily_brief", "panic_mode"}
+INTENTS_TO_SKIP_SAVING = {
+    "conversation",
+    "seek_advice",
+    "daily_brief",
+    "panic_mode"
+}
 
 
 def build_system_prompt(chat_id: str) -> str:
-    """Build enriched system prompt with Neo4j context for this user."""
-    context = get_user_context(chat_id)
-    context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
-
+    """Build enriched system prompt with Neo4j long term memory and current time."""
     import pytz
     from datetime import datetime
 
-    # Always use Berlin timezone for current time
+    # Her timezone code — untouched
     berlin_tz = pytz.timezone("Europe/Berlin")
     now_berlin = datetime.now(berlin_tz)
     current_time = now_berlin.strftime("%Y-%m-%dT%H:%M:%S")
     utc_offset = now_berlin.strftime("%z")
-    formatted_offset = f"{utc_offset[:3]}:{utc_offset[3:]}"  # "+02:00"
+    formatted_offset = f"{utc_offset[:3]}:{utc_offset[3:]}"
 
     time_block = f"""
 Current date and time is: {current_time} (Europe/Berlin, UTC{formatted_offset})
@@ -45,6 +47,10 @@ Always include timezone offset in all datetime extractions.
 Format: YYYY-MM-DDTHH:MM:SS{formatted_offset}
 Example: if user says 3pm tomorrow and today is {now_berlin.strftime('%Y-%m-%d')}, extract: {(now_berlin).strftime('%Y-%m-%d')}T15:00:00{formatted_offset}
 """
+
+    # My Neo4j context
+    context = get_user_context(chat_id)
+    context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
 
     return f"{CLASSIFIER_SYSTEM_PROMPT}{time_block}\n\n{context_block}"
 
@@ -54,18 +60,27 @@ def handle_brain_dump(chat_id: str, items: list):
     for item in items:
         intent = item.get("intent")
         if intent == "create_task" and item.get("task"):
-            save_task(chat_id, item["task"].get(
-                "title"), item["task"].get("due"))
+            save_task(
+                chat_id,
+                item["task"].get("title"),
+                item["task"].get("due")
+            )
         elif intent == "set_reminder" and item.get("reminder"):
-            save_reminder(chat_id, item["reminder"].get(
-                "text"), item["reminder"].get("datetime"))
+            save_reminder(
+                chat_id,
+                item["reminder"].get("text"),
+                item["reminder"].get("datetime")
+            )
         elif intent == "save_memory" and item.get("memory_summary"):
-            save_memory(chat_id, item["memory_summary"],
-                        item.get("entities", []))
+            save_memory(
+                chat_id,
+                item["memory_summary"],
+                item.get("entities", [])
+            )
 
 
 def route_intent(chat_id: str, llm_response: LLMResponse):
-    """Route LLM response to the correct Neo4j save function based on intent."""
+    """Route LLM response to correct save function based on intent."""
 
     intent = llm_response.intent
 
@@ -74,8 +89,20 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "save_memory":
         if llm_response.memory_summary:
-            save_memory(chat_id, llm_response.memory_summary,
-                        llm_response.entities)
+            save_memory(
+                chat_id,
+                llm_response.memory_summary,
+                llm_response.entities
+            )
+
+    elif intent == "vent":
+        # Empathy reply but still save if there's personal content
+        if llm_response.memory_summary:
+            save_memory(
+                chat_id,
+                llm_response.memory_summary,
+                llm_response.entities
+            )
 
     elif intent == "set_reminder":
         if llm_response.reminder:
@@ -85,7 +112,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
             )
-            # ← Also save to Notion
+            # Her Notion integration — untouched
             save_reminder_to_notion(
                 chat_id,
                 llm_response.reminder.get("text"),
@@ -100,7 +127,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
             )
-            # ← Also save to Notion
+            # Her Notion integration — untouched
             save_task_to_notion(
                 chat_id,
                 llm_response.task.get("title"),
@@ -122,6 +149,9 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
     elif intent == "update_memory":
         if llm_response.entities:
             update_entity(chat_id, llm_response.entities)
+        # Also save correction as a new memory
+        if llm_response.memory_summary:
+            save_memory(chat_id, llm_response.memory_summary, [])
 
     elif intent == "brain_dump":
         if llm_response.items:
@@ -130,8 +160,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
 def process_user_input(chat_id: str, user_input: str) -> str:
     """
-    Takes user message, runs it through Groq LLM,
-    classifies intent, saves to Neo4j, returns reply for Telegram.
+    Takes user message, runs through Groq LLM,
+    classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
     """
 
     if chat_id not in conversation_histories:
@@ -141,7 +171,6 @@ def process_user_input(chat_id: str, user_input: str) -> str:
     history.append({"role": "user", "content": user_input})
 
     try:
-        # Build prompt enriched with Neo4j long term memory
         system_prompt = build_system_prompt(chat_id)
 
         response = client.chat.completions.create(
@@ -170,10 +199,8 @@ def process_user_input(chat_id: str, user_input: str) -> str:
             items=data.get("items", [])
         )
 
-        # Save assistant reply to history
         history.append({"role": "assistant", "content": raw})
 
-        # Trim history
         if len(history) > 20:
             conversation_histories[chat_id] = history[-20:]
 
@@ -182,7 +209,6 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         print(f"[LLM] Entities: {llm_response.entities}")
         print(f"[LLM] Memory: {llm_response.memory_summary}")
 
-        # Route to Neo4j
         route_intent(chat_id, llm_response)
 
         return llm_response.reply_to_user
