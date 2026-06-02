@@ -16,7 +16,6 @@ Classify the user message into one of these intents:
                     "my son's name is Zain" → save name of family member
 
                     WORK & PROFESSIONAL:
-                    "I have a big presentation next week" → save work event
                     "my boss is really demanding" → save work context
                     "I got promoted today" → save achievement
                     "I hate my current project" → save work feeling
@@ -41,6 +40,11 @@ Classify the user message into one of these intents:
                     "I love reading before bed" → save habit
                     "I can't function without coffee" → save personal fact
 
+                    PAST TENSE ACTIONS:
+                    "I picked up my son yesterday" → save memory
+                    "I called Dr. Ahmed this morning" → save memory
+                    "I went to the gym today" → save memory
+
                     RANDOM FACTS & THOUGHTS:
                     "I've been feeling lonely lately" → save personal state
                     "I used to play piano as a kid" → save personal history
@@ -54,16 +58,39 @@ Classify the user message into one of these intents:
 
                     RULE: If it's personal, meaningful, or might matter later
                     → ALWAYS "save_memory". When in doubt, SAVE IT.
+                    Past tense = always save_memory.
 
-- "set_reminder"  → user wants to be reminded of something. Examples:
+- "set_reminder"  → user wants to be reminded of something at a specific time. Examples:
                     "remind me to take medicine at 8pm"
                     "don't let me forget to call mom tomorrow"
                     "alert me about the meeting on Friday"
+                    "remind me at 3pm"
 
-- "create_task"   → user wants to do something / add to their to-do list. Examples:
-                    "I need to call Dr. Ahmed"
-                    "I have to finish the report"
+- "create_task"   → user wants to do something / add to their to-do list.
+                    This includes ANY action the user needs to take in the future,
+                    even if not explicitly saying "create task" or "add to list".
+
+                    EXPLICIT:
+                    "create a task to call Ahmed"
                     "add gym to my list"
+                    "I need to finish the report"
+
+                    IMPLICIT ACTION PHRASES:
+                    "I have to pick my son at 3pm" → task: pick up son, due: 3pm
+                    "I need to call mom tomorrow" → task: call mom, due: tomorrow
+                    "I should go to the pharmacy" → task: go to pharmacy
+                    "I must submit the report by Friday" → task: submit report, due: Friday
+                    "don't forget I have a meeting at 2pm" → task: meeting, due: 2pm
+                    "I have a dentist appointment Thursday" → task: dentist appointment, due: Thursday
+                    "I am supposed to call the school today" → task: call school, due: today
+                    "I've got to buy groceries" → task: buy groceries
+                    "I have to pick up my kids after school" → task: pick up kids
+
+                    KEY SIGNALS — these words almost always mean create_task:
+                    "I have to", "I need to", "I should", "I must",
+                    "I have a [appointment/meeting/event]", "don't forget to",
+                    "I'm supposed to", "I've got to", "I have to go",
+                    "I am going to", "I plan to"
 
 - "question"      → user is asking about something they told the bot before. Examples:
                     "who is Elena?"
@@ -74,6 +101,7 @@ Classify the user message into one of these intents:
                     "what does my son like?"
                     "when is my dentist appointment?"
                     "what did I tell you about work?"
+                    "what do I have today?"
 
 - "conversation"  → ONLY these qualify:
                     Pure greetings: "hi", "hello", "hey", "good morning"
@@ -87,23 +115,27 @@ Classify the user message into one of these intents:
                     "I'm so stressed I can't do anything"
                     "I feel like I'm failing at everything"
                     "I hate that I keep forgetting things"
-                    NOTE: if they mention a specific person or fact while venting → also save_memory
+                    NOTE: if they mention a specific person or fact while venting → also save memory_summary
 
 - "brain_dump"    → user throws multiple things at once (tasks, reminders, memories mixed).
                     Examples:
                     "I need to call mom, pick up groceries, remind me dentist Friday"
                     "so much to do today — gym, report, call Ahmed, buy medicine"
+                    "I have to pick my son at 3pm, also remind me medicine at 8pm, 
+                     oh and Ahmed called today he is my new colleague"
 
 - "update_memory" → user is correcting or updating something previously said. Examples:
                     "actually Elena is my niece not my daughter"
                     "Dr. Ahmed retired, my new doctor is Dr. Sara"
                     "I don't work at that company anymore"
+                    "my son's name is not Zain it's Zayn"
 
 - "mark_done"     → user completed a task or reminder. Examples:
                     "I called Dr. Ahmed"
                     "done with the report"
                     "I took my medicine"
                     "finished the gym session"
+                    "I picked up my son"
 
 - "daily_brief"   → user wants overview of their day. Examples:
                     "what do I have today?"
@@ -117,18 +149,21 @@ Classify the user message into one of these intents:
                     "I don't know where to start"
                     "everything is too much"
                     "I'm overwhelmed I can't begin anything"
+                    "I feel paralyzed"
 
 - "habit_track"   → user is logging a recurring habit or activity. Examples:
                     "I went for a walk today"
                     "slept 7 hours last night"
                     "drank 2 liters of water today"
                     "did 20 minutes of meditation"
+                    "I exercised today"
 
 - "seek_advice"   → user asking for help making a decision or needs guidance. Examples:
                     "should I call mom or wait?"
                     "I don't know if I should take the job"
                     "what do you think I should do about Ahmed?"
                     "help me decide between these two options"
+                    "what would you do in my situation?"
 
 Return this exact JSON structure:
 {
@@ -155,9 +190,10 @@ Rules:
   "items": [
     { "intent": "create_task", "task": { "title": "Call mom", "due": null } },
     { "intent": "set_reminder", "reminder": { "text": "Dentist", "datetime": "Friday" } },
-    { "intent": "save_memory", "memory_summary": "User has a lot on their plate today", "entities": [] }
+    { "intent": "save_memory", "memory_summary": "Ahmed is user's new colleague", "entities": [{"name": "Ahmed", "type": "person", "relation": "colleague"}] }
   ]
-- For "update_memory" — fill entities with the corrected information
+- For "update_memory" — fill entities with the corrected information and fill memory_summary
+  with the correction as a complete sentence
 - For "mark_done" — fill task with the title of what was completed
 - For "habit_track" — fill habit with name and value
 - For "daily_brief" — reply_to_user can say data is being fetched, actual data from DB
@@ -176,6 +212,10 @@ Rules:
 - "conversation" and "seek_advice" should NEVER be saved to database
 - CRITICAL: Any message with personal content → "save_memory". Never lose information.
 - CRITICAL: memory_summary must make complete sense on its own without any other context
+- CRITICAL: Future actions → "create_task". Past actions/facts → "save_memory".
+  Tense matters: "I have to go" → create_task, "I went" → save_memory
+- CRITICAL: "I have to", "I need to", "I should", "I must", "I have a [appointment/meeting/event]",
+  "don't forget to", "I'm supposed to", "I've got to" → ALWAYS create_task
 """
 
 NEO4J_CONTEXT_PROMPT = """
