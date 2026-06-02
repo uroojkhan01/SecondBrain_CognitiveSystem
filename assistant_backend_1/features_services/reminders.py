@@ -51,26 +51,14 @@ def send_telegram(chat_id: str, message: str):
 
 
 def get_notion_tasks(token: str, database_id: str):
-    """Fetch all tasks from Notion database"""
     url = f"https://api.notion.com/v1/databases/{database_id}/query"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-
-    # Only fetch tasks that are not done
-    payload = {
-        "filter": {
-            "property": "Status",
-            "status": {
-                "does_not_equal": "Done"
-            }
-        }
-    }
-
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json={})  # ← no filter
 
         if response.status_code == 429:
             retry_after = int(response.headers.get("Retry-After", 60))
@@ -86,66 +74,61 @@ def get_notion_tasks(token: str, database_id: str):
         return []
 
 
-def extract_tasks(results):
-    """Extract tasks with due date/time from Notion results"""
+def extract_tasks(results, schema: dict = {}):
+    """Extract tasks using dynamic column names from schema"""
     tasks = []
+
+    # Find column names from schema
+    title_col = next((k for k, v in schema.items() if v == "title"), None)
+    date_col = next((k for k, v in schema.items() if v == "date"), None)
+
+    # Fallback column names if schema not available
+    title_candidates = [title_col] if title_col else ["Task name", "Name", "Title", "Task"]
+    date_candidates = [date_col] if date_col else ["Due date", "Due", "Date", "Deadline"]
 
     for page in results:
         props = page["properties"]
 
         # Get task name
-        try:
-            name = props["Task name"]["title"][0]["text"]["content"]
-        except:
+        name = None
+        for col in title_candidates:
+            try:
+                name = props[col]["title"][0]["text"]["content"]
+                break
+            except:
+                continue
+        if not name:
             name = "Unnamed Task"
 
         # Get due date
-        try:
-            due_str = props["Due date"]["date"]["start"]
-        except:
-            continue  # skip tasks with no due date
+        due_str = None
+        for col in date_candidates:
+            try:
+                due_str = props[col]["date"]["start"]
+                break
+            except:
+                continue
 
-        # Check if it has time component
+        if not due_str:
+            continue
+
         if "T" in due_str:
-            # Has time e.g. "2026-05-26T15:00:00+02:00"
             due_datetime = datetime.fromisoformat(due_str)
-
-            # Use timezone from Notion's date string directly
             if due_datetime.tzinfo is None:
-                # No timezone in string — assume UTC
-                due_datetime = pytz.utc.localize(due_datetime)
-
-            tasks.append({
-                "name": name,
-                "due_datetime": due_datetime,
-                "has_time": True
-            })
-
+                due_datetime = due_datetime.astimezone()
+            has_time = True
         else:
-            # Date only e.g. "2026-05-26"
-            due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
+            due_datetime = datetime.strptime(due_str, "%Y-%m-%d").date()
+            has_time = False
 
-            tasks.append({
-                "name": name,
-                "due_datetime": due_date,
-                "has_time": False
-            })
+        tasks.append({
+            "name": name,
+            "due_datetime": due_datetime,
+            "has_time": has_time
+        })
 
     return tasks
 
-
-def get_reminder_key(chat_id: str, task_name: str, due) -> str:
-    """Unique key per user+task+due to prevent duplicate reminders"""
-    if isinstance(due, datetime):
-        due_str = due.strftime('%Y-%m-%d-%H-%M')
-    else:
-        due_str = str(due)
-    return f"{chat_id}_{task_name}_{due_str}"
-
-
-# ============================================
-# MAIN CHECK FUNCTION
-# ============================================
 
 def check_and_remind():
     print(f"\n🔍 Checking all users at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -165,12 +148,18 @@ def check_and_remind():
             print(f"⚠️ Skipping {chat_id} — no token or database")
             continue
 
-        print(f"👤 Checking tasks for: {chat_id}")
+        # Get schema for this user's active database
+        active_schema = {}
+        for db in notion.get("database_ids", []):
+            if db["id"] == database_id:
+                active_schema = db.get("schema", {})
+                break
+
+        print(f"👤 Checking tasks for: {chat_id} | Schema: {active_schema}")
 
         results = get_notion_tasks(token, database_id)
-        tasks = extract_tasks(results)
+        tasks = extract_tasks(results, active_schema)
 
-        # Use UTC now for comparison — Notion dates have their own tz offset
         now = datetime.now(pytz.utc)
 
         for task in tasks:
@@ -178,21 +167,23 @@ def check_and_remind():
             name = task["name"]
 
             if task["has_time"]:
-                # Convert both to UTC for accurate comparison
-                due_utc = due.astimezone(pytz.utc)
+                # Convert to UTC for comparison
+                if hasattr(due, 'tzinfo') and due.tzinfo is not None:
+                    due_utc = due.astimezone(pytz.utc)
+                else:
+                    due_utc = pytz.utc.localize(due)
+
                 minutes_until_due = (due_utc - now).total_seconds() / 60
 
                 lower = REMINDER_BEFORE_MINUTES - CHECK_INTERVAL_MINUTES
                 upper = REMINDER_BEFORE_MINUTES + CHECK_INTERVAL_MINUTES
 
+                # 15 min warning
                 if lower <= minutes_until_due <= upper:
                     reminder_key = get_reminder_key(chat_id, name, due)
-
                     if reminder_key not in sent_reminders:
-                        # Show time in Notion's original timezone
                         local_time = due.strftime('%I:%M %p')
                         tz_name = due.strftime('%Z')
-
                         message = (
                             f"⏰ *Upcoming Task!*\n\n"
                             f"📌 *{name}*\n"
@@ -205,15 +196,39 @@ def check_and_remind():
                     else:
                         print(f"⏭ Already reminded: {name}")
 
+                # Due now
+                elif -CHECK_INTERVAL_MINUTES <= minutes_until_due <= 0:
+                    reminder_key = get_reminder_key(chat_id, name, due) + "_now"
+                    if reminder_key not in sent_reminders:
+                        message = (
+                            f"🔔 *It's Time!*\n\n"
+                            f"📌 *{name}*\n"
+                            f"🕒 Due NOW: *{due.strftime('%I:%M %p')}*"
+                        )
+                        send_telegram(chat_id, message)
+                        sent_reminders[reminder_key] = True
+                        print(f"✅ Due now reminder sent: {name}")
+
+                # Catch tasks due very soon (startup edge case)
+                elif 0 < minutes_until_due < lower:
+                    reminder_key = get_reminder_key(chat_id, name, due)
+                    if reminder_key not in sent_reminders:
+                        message = (
+                            f"⚡ *Due Very Soon!*\n\n"
+                            f"📌 *{name}*\n"
+                            f"🕒 Due in *{int(minutes_until_due)} minutes!*"
+                        )
+                        send_telegram(chat_id, message)
+                        sent_reminders[reminder_key] = True
+
             else:
-                # Date only — remind at midnight (00:00)
+                # Date only → remind at midnight
                 now_local = datetime.now()
                 is_midnight = now_local.hour == 0 and now_local.minute < CHECK_INTERVAL_MINUTES
                 is_due_today = due == now_local.date()
 
                 if is_due_today and is_midnight:
                     reminder_key = get_reminder_key(chat_id, name, due)
-
                     if reminder_key not in sent_reminders:
                         message = (
                             f"📅 *Due Today!*\n\n"
@@ -223,10 +238,18 @@ def check_and_remind():
                         send_telegram(chat_id, message)
                         sent_reminders[reminder_key] = True
                         print(f"✅ Date reminder sent: {name}")
-                    else:
-                        print(f"⏭ Already reminded: {name}")
 
     print(f"✅ Check complete")
+
+
+def get_reminder_key(chat_id: str, task_name: str, due) -> str:
+    """Unique key per user+task+due to prevent duplicate reminders"""
+    if isinstance(due, datetime):
+        due_str = due.strftime('%Y-%m-%d-%H-%M')
+    else:
+        due_str = str(due)
+    return f"{chat_id}_{task_name}_{due_str}"
+
 
 
 # ============================================

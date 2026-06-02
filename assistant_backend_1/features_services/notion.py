@@ -7,6 +7,28 @@ from datetime import datetime, timedelta
 from assistant_backend_1.helpers import load_users
 
 
+def get_active_database_schema(chat_id: str) -> dict:
+    """Get schema of user's active database"""
+    users = load_users()
+    user = users.get(str(chat_id), {})
+    notion = user.get("notion", {})
+    active_id = notion.get("active_database_id")
+    database_ids = notion.get("database_ids", [])
+    
+    for db in database_ids:
+        if db["id"] == active_id:
+            return db.get("schema", {})
+    
+    return {}
+
+
+def get_column_name(schema: dict, col_type: str) -> str:
+    """Find column name by type from schema"""
+    for col_name, col_type_val in schema.items():
+        if col_type_val == col_type:
+            return col_name
+    return None
+
 def get_user_notion_credentials(chat_id: str):
     """Get token and active database id for a user"""
     users = load_users()
@@ -139,12 +161,21 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
         return None
 
 def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
-    """Save a task to user's Notion database"""
     token, database_id = get_user_notion_credentials(chat_id)
 
     if not token or not database_id:
         print(f"⚠️ No Notion credentials for {chat_id}")
         return False
+
+    # ← Get schema to find correct column names
+    schema = get_active_database_schema(chat_id)
+    print(f"📋 Using schema: {schema}")
+
+    # Find correct column names from schema
+    title_col = get_column_name(schema, "title") or "Task name"
+    date_col = get_column_name(schema, "date") or "Due date"
+    status_col = get_column_name(schema, "status") or None
+    checkbox_col = get_column_name(schema, "checkbox") or None
 
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -153,21 +184,25 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         "Notion-Version": "2022-06-28"
     }
 
+    # Build props dynamically
     props = {
-        "Task name": {
+        title_col: {
             "title": [{"text": {"content": str(title)}}]
-        },
-        "Status": {
-            "status": {"name": "Not started"}
         }
     }
 
-    # Format due date with correct timezone
+    # Add status if column exists
+    if status_col:
+        props[status_col] = {"status": {"name": "Not started"}}
+
+    # Add checkbox if exists and no status
+    elif checkbox_col:
+        props[checkbox_col] = {"checkbox": False}
+
+    # Add due date
     formatted_due = format_due_date_for_notion(due, token, database_id)
-    if formatted_due:
-        props["Due date"] = {
-            "date": {"start": formatted_due}
-        }
+    if formatted_due and date_col:
+        props[date_col] = {"date": {"start": formatted_due}}
 
     try:
         response = requests.post(
@@ -192,12 +227,20 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
 
 
 def save_reminder_to_notion(chat_id: str, text: str, remind_at: str = None) -> bool:
-    """Save a reminder to user's Notion database as a task"""
     token, database_id = get_user_notion_credentials(chat_id)
 
     if not token or not database_id:
         print(f"⚠️ No Notion credentials for {chat_id}")
         return False
+
+    # ← Get schema
+    schema = get_active_database_schema(chat_id)
+    print(f"📋 Using schema: {schema}")
+
+    title_col = get_column_name(schema, "title") or "Task name"
+    date_col = get_column_name(schema, "date") or "Due date"
+    status_col = get_column_name(schema, "status") or None
+    checkbox_col = get_column_name(schema, "checkbox") or None
 
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -207,20 +250,19 @@ def save_reminder_to_notion(chat_id: str, text: str, remind_at: str = None) -> b
     }
 
     props = {
-        "Task name": {
+        title_col: {
             "title": [{"text": {"content": f"🔔 {str(text)}"}}]
-        },
-        "Status": {
-            "status": {"name": "Not started"}
         }
     }
 
-    # Format remind_at with correct timezone
+    if status_col:
+        props[status_col] = {"status": {"name": "Not started"}}
+    elif checkbox_col:
+        props[checkbox_col] = {"checkbox": False}
+
     formatted_due = format_due_date_for_notion(remind_at, token, database_id)
-    if formatted_due:
-        props["Due date"] = {
-            "date": {"start": formatted_due}
-        }
+    if formatted_due and date_col:
+        props[date_col] = {"date": {"start": formatted_due}}
 
     try:
         response = requests.post(
