@@ -25,6 +25,7 @@ INTENTS_TO_SKIP_SAVING = {"conversation", "vent", "daily_brief", "panic_mode"}
 
 
 def build_system_prompt(chat_id: str) -> str:
+    """Build enriched system prompt with Neo4j context for this user."""
     context = get_user_context(chat_id)
     context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
 
