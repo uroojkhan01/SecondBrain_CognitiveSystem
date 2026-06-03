@@ -7,14 +7,18 @@ import threading
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start reminder scheduler in background thread
     thread = threading.Thread(target=start_reminder_scheduler, daemon=True)
-    thread.start()
-    print("✅ Reminder scheduler running in background")
+
+    try:
+        thread.start()
+        print("Scheduler started")
+    except Exception as e:
+        print("Scheduler failed:", e)
+
     yield
 
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.include_router(telegram_router)
 
 
