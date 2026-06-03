@@ -160,7 +160,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
 def process_user_input(chat_id: str, user_input: str) -> str:
     """
-    Takes user message, runs through Groq LLM,
+    Takes user message, runs through Groq LLM, we can use claude as well if the quota is finished
     classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
     """
 
