@@ -7,7 +7,7 @@ Always respond ONLY with a valid JSON object. No explanation, no markdown, no pr
 
 Classify the user message into one of these intents:
 
-- "save_memory"   → user is sharing ANYTHING worth remembering. This includes:
+- "save_memory"   → user is sharing ANYTHING worth remembering. This includes:   
 
                     PEOPLE & RELATIONSHIPS:
                     "Elena is my friend" → save Elena as friend
