@@ -49,7 +49,11 @@ async def telegram_webhook(request: Request):
     chat_id = str(message["chat"]["id"])
 
     ### process user input through llm model ###
-    reply = process_user_input(chat_id, user_input)
+    from assistant_backend_1.config import ENABLE_LLM_API
+    if ENABLE_LLM_API:
+        reply = process_user_input(chat_id, user_input)
+    else:
+        reply = f"[LLM API Disabled] You said: {user_input}"
 
     first_name = message["chat"].get("first_name")
     username = message["chat"].get("username")

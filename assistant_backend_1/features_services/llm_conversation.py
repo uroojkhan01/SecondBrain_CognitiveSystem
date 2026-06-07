@@ -1,6 +1,6 @@
 import json
 from groq import Groq
-from assistant_backend_1.config import GROQ_API_KEY
+from assistant_backend_1.config import GROQ_API_KEYS
 from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT, NEO4J_CONTEXT_PROMPT
 from assistant_backend_1.models.llmresponse import LLMResponse
 from assistant_backend_1.features_services.memory_journal import (
@@ -16,8 +16,6 @@ from assistant_backend_1.features_services.notion import (
     save_task_to_notion,
     save_reminder_to_notion
 )
-
-client = Groq(api_key=GROQ_API_KEY)
 
 conversation_histories: dict[str, list] = {}
 
@@ -173,16 +171,32 @@ def process_user_input(chat_id: str, user_input: str) -> str:
     try:
         system_prompt = build_system_prompt(chat_id)
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=1024,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *history
-            ]
-        )
+        response = None
+        last_exception = None
+        
+        for api_key in GROQ_API_KEYS:
+            try:
+                temp_client = Groq(api_key=api_key)
+                response = temp_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                    max_tokens=1024,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *history
+                    ]
+                )
+                break
+            except Exception as e:
+                print(f"[LLM] Request failed with key starting with {str(api_key)[:5] if api_key else 'None'}... : {e}")
+                last_exception = e
+                
+        if response is None:
+            if last_exception:
+                raise last_exception
+            else:
+                raise Exception("No valid API keys available.")
 
         raw = response.choices[0].message.content
         data = json.loads(raw)

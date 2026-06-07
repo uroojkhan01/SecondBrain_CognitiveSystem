@@ -87,6 +87,7 @@ def extract_tasks(results, schema: dict = {}):
     date_candidates = [date_col] if date_col else ["Due date", "Due", "Date", "Deadline"]
 
     for page in results:
+        page_id = page["id"]
         props = page["properties"]
 
         # Get task name
@@ -122,6 +123,7 @@ def extract_tasks(results, schema: dict = {}):
             has_time = False
 
         tasks.append({
+            "id": page_id,
             "name": name,
             "due_datetime": due_datetime,
             "has_time": has_time
@@ -250,6 +252,89 @@ def get_reminder_key(chat_id: str, task_name: str, due) -> str:
         due_str = str(due)
     return f"{chat_id}_{task_name}_{due_str}"
 
+
+
+# ============================================
+# CRUD OPERATIONS FOR REMINDERS
+# ============================================
+
+def create_reminder(chat_id: str, text: str, remind_at: str = None) -> bool:
+    """Create a new reminder in Notion"""
+    from assistant_backend_1.features_services.notion import save_reminder_to_notion
+    return save_reminder_to_notion(chat_id, text, remind_at)
+
+
+def get_all_reminders(chat_id: str) -> list:
+    """Read all reminders from Notion for this user"""
+    from assistant_backend_1.features_services.notion import get_user_notion_credentials, get_active_database_schema
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token or not database_id:
+        print(f"⚠️ No Notion credentials for {chat_id}")
+        return []
+
+    # Get schema for this user's active database
+    schema = get_active_database_schema(chat_id)
+    results = get_notion_tasks(token, database_id)
+    return extract_tasks(results, schema)
+
+
+def update_reminder(chat_id: str, page_id: str, text: str = None, remind_at: str = None) -> bool:
+    """Update an existing reminder in Notion"""
+    from assistant_backend_1.features_services.notion import get_user_notion_credentials, get_active_database_schema, get_column_name, format_due_date_for_notion
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token or not database_id:
+        return False
+        
+    schema = get_active_database_schema(chat_id)
+    title_col = get_column_name(schema, "title") or "Task name"
+    date_col = get_column_name(schema, "date") or "Due date"
+    
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    props = {}
+    if text is not None:
+        props[title_col] = {"title": [{"text": {"content": str(text)}}]}
+    if remind_at is not None:
+        formatted_due = format_due_date_for_notion(remind_at, token, database_id)
+        if formatted_due:
+            props[date_col] = {"date": {"start": formatted_due}}
+            
+    if not props:
+        return True
+        
+    try:
+        response = requests.patch(url, headers=headers, json={"properties": props})
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Error updating reminder: {e}")
+        return False
+
+
+def delete_reminder(chat_id: str, page_id: str) -> bool:
+    """Delete (archive) a reminder in Notion"""
+    from assistant_backend_1.features_services.notion import get_user_notion_credentials
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+        
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    try:
+        response = requests.patch(url, headers=headers, json={"archived": True})
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Error deleting reminder: {e}")
+        return False
 
 
 # ============================================
