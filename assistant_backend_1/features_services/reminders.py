@@ -1,4 +1,12 @@
 # assistant_backend_1/features_services/reminders.py
+"""
+Reminders Service
+-----------------
+This module handles the core functionality for managing and dispatching reminders.
+It is divided into two main parts:
+1. A background scheduler (`check_and_remind`) that periodically polls Notion for due tasks and sends alerts via Telegram.
+2. CRUD operations to programmatically Create, Read, Update, and Delete Notion-based reminders.
+"""
 
 import requests
 import json
@@ -134,6 +142,12 @@ def extract_tasks(results, schema: dict = {}):
 
 
 def check_and_remind():
+    """
+    Core background job that scans every registered user's Notion database for upcoming tasks.
+    It checks if tasks are due soon (e.g., within 15 minutes) or due today without a specific time.
+    If a task meets the criteria, it dispatches a Telegram notification and marks the task as reminded
+    in the in-memory `sent_reminders` dictionary to prevent duplicate alerts.
+    """
     print(f"\n🔍 Checking all users at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
     users = load_users()
@@ -258,6 +272,9 @@ def get_reminder_key(chat_id: str, task_name: str, due) -> str:
 # ============================================
 # CRUD OPERATIONS FOR REMINDERS
 # ============================================
+# These functions provide an interface to interact with reminders directly.
+# Since reminders are backed by Notion, these functions communicate with the Notion API
+# to synchronize the data state.
 
 def create_reminder(chat_id: str, text: str, remind_at: str = None) -> bool:
     """Create a new reminder in Notion"""
@@ -280,7 +297,11 @@ def get_all_reminders(chat_id: str) -> list:
 
 
 def update_reminder(chat_id: str, page_id: str, text: str = None, remind_at: str = None) -> bool:
-    """Update an existing reminder in Notion"""
+    """
+    Update an existing reminder in Notion.
+    Dynamically identifies the correct title and date columns based on the user's active database schema,
+    formats the new data appropriately, and sends a PATCH request to update the Notion page properties.
+    """
     from assistant_backend_1.features_services.notion import get_user_notion_credentials, get_active_database_schema, get_column_name, format_due_date_for_notion
     token, database_id = get_user_notion_credentials(chat_id)
     if not token or not database_id:
@@ -317,7 +338,11 @@ def update_reminder(chat_id: str, page_id: str, text: str = None, remind_at: str
 
 
 def delete_reminder(chat_id: str, page_id: str) -> bool:
-    """Delete (archive) a reminder in Notion"""
+    """
+    Delete a reminder in Notion.
+    Note: The Notion API does not support hard-deleting pages directly via standard endpoints.
+    Instead, this function "archives" the page by setting its 'archived' property to True.
+    """
     from assistant_backend_1.features_services.notion import get_user_notion_credentials
     token, _ = get_user_notion_credentials(chat_id)
     if not token:
