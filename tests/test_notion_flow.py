@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, AsyncMock, patch
 # Ensure the package is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# 1. Mock Neo4j before import
+# 1. Mock Neo4j and voice transcription libraries before import
 mock_neo4j = MagicMock()
 sys.modules['neo4j'] = mock_neo4j
+sys.modules['faster_whisper'] = MagicMock()
 
 # Imports to test
 from assistant_backend_1.features_services.notion_mcp import NotionAgent
@@ -140,10 +141,68 @@ async def test_page_attached_flow():
         print("✅ add_database_page dynamically transforms arguments for page parent correctly")
 
 
+async def test_telegram_webhook_checks():
+    print("\n--- Testing Telegram Webhook connection checks ---")
+    from assistant_backend_1.api.handlers.telegram_handler import telegram_webhook
+    
+    # 1. Test when token is missing
+    chat_id = "test_user_no_token"
+    mock_user_data = {
+        str(chat_id): {
+            "notion": {
+                "token": None,
+                "active_database_id": None
+            }
+        }
+    }
+    
+    # Mock FastAPI Request
+    mock_request = AsyncMock()
+    mock_request.json = AsyncMock(return_value={
+        "message": {
+            "chat": {"id": chat_id, "first_name": "Test", "username": "test"},
+            "text": "Hello"
+        }
+    })
+    
+    with patch("assistant_backend_1.helpers.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.save_user"), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.send_message") as mock_send:
+        
+        await telegram_webhook(mock_request)
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][1]
+        assert "Welcome! Please connect your Notion account" in sent_message
+        print("✅ Correctly prompted to connect Notion when token is missing")
+
+    # 2. Test when token is present but active_database_id is missing
+    mock_user_data = {
+        str(chat_id): {
+            "notion": {
+                "token": "fake_token",
+                "active_database_id": None
+            }
+        }
+    }
+    
+    with patch("assistant_backend_1.helpers.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.save_user"), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.send_message") as mock_send:
+        
+        await telegram_webhook(mock_request)
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][1]
+        assert "no pages or databases are attached to the integration" in sent_message
+        print("✅ Correctly prompted to attach databases/pages when active_database_id is missing")
+
+
 async def main():
     try:
         await test_database_attached_flow()
         await test_page_attached_flow()
+        await test_telegram_webhook_checks()
         print("\n🎉 All Notion flow tests PASSED successfully!")
     except AssertionError as e:
         print(f"\n❌ Assertion failed during tests: {e}")

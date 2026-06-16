@@ -61,9 +61,16 @@ async def telegram_webhook(request: Request):
 
     # Save user to JSON
     save_user(chat_id, first_name, username)
-    print(f"Current users: {load_users()}")
+    current_users = load_users()
+    print(f"Current users: {current_users}")
 
-    if not is_notion_connected(chat_id):
+    # Check Notion credentials and attachment status
+    user_data = current_users.get(str(chat_id), {})
+    notion_data = user_data.get("notion", {})
+    token = notion_data.get("token")
+    active_database_id = notion_data.get("active_database_id")
+
+    if not token:
         oauth_url = get_oauth_url(chat_id)
         await send_message(
             chat_id,
@@ -71,8 +78,18 @@ async def telegram_webhook(request: Request):
             f"🔗 {oauth_url}"
         )
         return {"status": "ok"}
+    
+    if not active_database_id:
+        oauth_url = get_oauth_url(chat_id)
+        await send_message(
+            chat_id,
+            f"⚠️ Notion is connected, but no pages or databases are attached to the integration.\n\n"
+            f"Please click the link below to reconnect and ensure you select the pages/databases you want to share with the assistant:\n\n"
+            f"🔗 {oauth_url}"
+        )
+        return {"status": "ok"}
 
-    # Notion is connected — handle message normally
+    # Notion is connected and active — handle message normally
 
     print("sending message back to user")
     await send_message(chat_id, reply)
