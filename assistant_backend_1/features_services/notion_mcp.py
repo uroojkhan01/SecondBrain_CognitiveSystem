@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from notion_client import AsyncClient
 
-# Removed unused langchain_openai import to ensure module load connectivity
+
 
 logger = logging.getLogger(__name__)
 __version__ = "1.0.0"
@@ -73,7 +73,7 @@ class NotionAgent:
             logger.error(f"Error saving Notion cache file: {e}")
 
     # =====================================================================
-    # SEARCH & RETRIEVAL HELPERS
+    # SEARCH & RETRIEVAL
     # =====================================================================
 
     def _extract_title_from_object(self, obj: Dict[str, Any]) -> str:
