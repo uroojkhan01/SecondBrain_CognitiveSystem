@@ -31,6 +31,22 @@ def fetch_database_schema(token: str, database_id: str) -> dict:
         print(f"❌ Error fetching schema: {e}")
         return {}
 
+def get_title_from_search_result(item: dict) -> str:
+    if item.get("object") == "database":
+        title_list = item.get("title", [])
+        if title_list:
+            return title_list[0].get("plain_text", "").strip() or title_list[0].get("text", {}).get("content", "").strip() or "Untitled Database"
+        return "Untitled Database"
+    elif item.get("object") == "page":
+        properties = item.get("properties", {})
+        for prop_name, prop_data in properties.items():
+            if prop_data.get("type") == "title":
+                title_list = prop_data.get("title", [])
+                if title_list:
+                    return title_list[0].get("plain_text", "").strip() or title_list[0].get("text", {}).get("content", "").strip() or "Untitled Page"
+        return "Untitled Page"
+    return "Untitled"
+
 async def notion_oauth_callback(request: Request):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -58,36 +74,34 @@ async def notion_oauth_callback(request: Request):
         await send_message(chat_id, "❌ Failed to connect Notion. Please try again.")
         return {"error": "Failed to get token"}
 
-    # Fetch all databases user gave access to
+    # Fetch all pages and databases user gave access to
     db_response = requests.post(
         "https://api.notion.com/v1/search",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "Notion-Version": "2022-06-28"
-        },
-        json={"filter": {"value": "database", "property": "object"}}
+        }
     )
 
     databases = db_response.json().get("results", [])
-    print(f"Found {len(databases)} databases")
+    print(f"Found {len(databases)} pages/databases")
 
-    # Build database list
-    
+    # Build database/page list
     database_list = []
     for db in databases:
-        try:
-            db_name = db["title"][0]["text"]["content"]
-        except:
-            db_name = "Untitled"
-    
-    # ← Fetch schema for each database
-        schema = fetch_database_schema(access_token, db["id"])
+        obj_type = db.get("object", "database")
+        db_name = get_title_from_search_result(db)
+        
+        schema = {}
+        if obj_type == "database":
+            schema = fetch_database_schema(access_token, db["id"])
     
         database_list.append({
             "id": db["id"],
             "name": db_name,
-            "schema": schema  # ← store schema
+            "type": obj_type,
+            "schema": schema
         })
 
     # Save token and databases
@@ -105,12 +119,12 @@ async def notion_oauth_callback(request: Request):
     # Notify user
     if len(database_list) > 1:
         db_options = "\n".join([
-            f"{i+1}. {db['name']}" for i, db in enumerate(database_list)
+            f"{i+1}. {db['name']} ({db['type'].capitalize()})" for i, db in enumerate(database_list)
         ])
         await send_message(
             chat_id,
             f"✅ Notion connected!\n\n"
-            f"📚 Found {len(database_list)} databases:\n\n"
+            f"📚 Found {len(database_list)} pages/databases:\n\n"
             f"{db_options}\n\n"
             f"Reply with the number to select one.\n"
             f"Currently using: *{database_list[0]['name']}*"
@@ -119,7 +133,7 @@ async def notion_oauth_callback(request: Request):
         await send_message(
             chat_id,
             f"✅ Notion connected!\n\n"
-            f"📚 Using: *{database_list[0]['name'] if database_list else 'No database found'}*\n\n"
+            f"📚 Using: *{database_list[0]['name'] if database_list else 'No pages/databases found'}*\n\n"
             f"You can now send me tasks!"
         )
 
@@ -127,8 +141,9 @@ async def notion_oauth_callback(request: Request):
         <html>
         <body style="font-family: sans-serif; text-align: center; padding: 50px;">
             <h2>✅ Notion Connected!</h2>
-            <p>Go back to Telegram to select your database.</p>
+            <p>Go back to Telegram to select your page/database.</p>
         </body>
         </html>
     """)
+
 

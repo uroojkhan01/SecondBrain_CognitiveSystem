@@ -242,6 +242,46 @@ class NotionAgent:
             logger.error(f"Error resolving data_source_id for {database_id}: {e}")
             return database_id
 
+    async def get_id_type(self, object_id: str) -> str:
+        """Determines if the object_id is a page or database."""
+        # 1. Check user.json if we have chat_id
+        chat_id = getattr(self, "chat_id", None)
+        if chat_id:
+            try:
+                from assistant_backend_1.helpers import load_users
+                users = load_users()
+                user = users.get(str(chat_id), {})
+                database_ids = user.get("notion", {}).get("database_ids", [])
+                for db in database_ids:
+                    if db.get("id") == object_id:
+                        return db.get("type", "database")
+            except Exception as e:
+                logger.error(f"Error checking user database_ids for object_id type: {e}")
+
+        # 2. Check db_cache values
+        for k, entry in self.db_cache.items():
+            if isinstance(entry, dict):
+                if entry.get("database_id") == object_id:
+                    return "database"
+                if entry.get("page_id") == object_id:
+                    return "page"
+            elif entry == object_id:
+                return "database"
+
+        # 3. Query Notion API
+        if self.client:
+            try:
+                await self.client.databases.retrieve(database_id=object_id)
+                return "database"
+            except Exception:
+                try:
+                    await self.client.pages.retrieve(page_id=object_id)
+                    return "page"
+                except Exception:
+                    pass
+        return "database" # default fallback
+
+
     # =====================================================================
     # GENERIC MCP TOOLS / CAPABILITIES
     # =====================================================================

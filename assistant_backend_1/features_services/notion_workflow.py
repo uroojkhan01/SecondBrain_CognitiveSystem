@@ -54,13 +54,25 @@ class NotionWorkflowManager:
                 logger.info(f"Dynamically switching NotionAgent to credentials of user {chat_id}...")
                 self.notion_agent.token = token
                 self.notion_agent.client = AsyncClient(auth=token)
+                self.notion_agent.chat_id = chat_id
                 
                 # Overwrite cache path and reload database cache for the user
                 self.notion_agent.cache_file = f"notion_cache_{str(chat_id)}.json"
                 self.notion_agent.db_cache = self.notion_agent._load_cache()
                 
-                # Store the active database ID
+                # Store the active database ID and type
                 self.notion_agent.active_database_id = database_id
+                
+                database_list = notion.get("database_ids", [])
+                active_item_type = "database"
+                for db in database_list:
+                    if db.get("id") == database_id:
+                        active_item_type = db.get("type", "database")
+                        break
+                
+                self.notion_agent.active_item_type = active_item_type
+                if active_item_type == "page":
+                    self.notion_agent.parent_page_id = database_id
             else:
                 logger.warning(f"No Notion token stored for user {chat_id}. Using default/mock credentials.")
         except Exception as e:
@@ -186,8 +198,27 @@ class NotionWorkflowManager:
 
                     # Execute NotionAgent asynchronous functions
                     if function_name == "add_database_page":
-                        parent = {"type": "database_id", "database_id": function_args.get("parent_database_id")}
-                        result = await self.notion_agent.create_page(parent, function_args.get("properties", {}))
+                        parent_id = function_args.get("parent_database_id")
+                        p_type = await self.notion_agent.get_id_type(parent_id)
+                        parent = {"type": f"{p_type}_id", f"{p_type}_id": parent_id}
+                        
+                        properties = function_args.get("properties", {})
+                        if p_type == "page":
+                            title_val = ""
+                            # Extract title from properties
+                            for k, v in properties.items():
+                                if isinstance(v, dict) and "title" in v:
+                                    title_val = v["title"]
+                                    break
+                            if not title_val:
+                                title_val = function_args.get("title", "")
+                            
+                            if isinstance(title_val, list):
+                                properties = {"title": title_val}
+                            else:
+                                properties = {"title": [{"text": {"content": str(title_val)}}]}
+                        
+                        result = await self.notion_agent.create_page(parent, properties)
                     elif function_name == "update_page":
                         result = await self.notion_agent.update_page_properties(
                             function_args.get("page_id"), 
@@ -247,6 +278,11 @@ class NotionWorkflowManager:
         """Builds workspace architecture programmatically for a specific user."""
         if chat_id:
             self.set_user_credentials(chat_id)
+
+        # Skip building architecture if the active item is a database, as we cannot nest databases/pages under a database parent
+        if getattr(self.notion_agent, "active_item_type", "database") == "database":
+            logger.info("Active attached item is a database. Skipping workspace architecture build.")
+            return
 
         logger.info("Building workspace architecture programmatically...")
         root_id = self.notion_agent.parent_page_id
