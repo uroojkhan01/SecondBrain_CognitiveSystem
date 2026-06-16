@@ -10,12 +10,12 @@ from assistant_backend_1.features_services.memory_journal import (
     save_task,
     save_habit,
     mark_task_done,
+    mark_reminder_done,
     update_entity
 )
-from assistant_backend_1.features_services.notion import (
-    save_task_to_notion,
-    save_reminder_to_notion
-)
+from assistant_backend_1.features_services.notion_mcp import NotionAgent
+from assistant_backend_1.features_services.notion_workflow import NotionWorkflowManager
+import asyncio
 
 conversation_histories: dict[str, list] = {}
 
@@ -77,7 +77,7 @@ def handle_brain_dump(chat_id: str, items: list):
             )
 
 
-def route_intent(chat_id: str, llm_response: LLMResponse):
+def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
     """Route LLM response to correct save function based on intent."""
 
     intent = llm_response.intent
@@ -104,14 +104,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "set_reminder":
         if llm_response.reminder:
-            # Save to Neo4j
+            # Save to Neo4j locally (independent local database)
             save_reminder(
-                chat_id,
-                llm_response.reminder.get("text"),
-                llm_response.reminder.get("datetime")
-            )
-            # Her Notion integration — untouched
-            save_reminder_to_notion(
                 chat_id,
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
@@ -119,18 +113,29 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "create_task":
         if llm_response.task:
-            # Save to Neo4j
+            # Save to Neo4j locally
             save_task(
                 chat_id,
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
             )
-            # Her Notion integration — untouched
-            save_task_to_notion(
-                chat_id,
-                llm_response.task.get("title"),
-                llm_response.task.get("due")
+            # Route and log task to Notion via NotionWorkflowManager
+            agent = NotionAgent()
+            workflow_manager = NotionWorkflowManager(agent)
+            
+            coro = workflow_manager.route_and_log_to_notion(
+                text=user_input,
+                intent=intent,
+                extracted_data=llm_response.task,
+                emotion="neutral",
+                chat_id=chat_id
             )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                # Fallback if no event loop is running (e.g. CLI or test)
+                asyncio.run(coro)
 
     elif intent == "habit_track":
         if llm_response.habit:
@@ -142,7 +147,9 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
 
     elif intent == "mark_done":
         if llm_response.task:
-            mark_task_done(chat_id, llm_response.task.get("title"))
+            title = llm_response.task.get("title")
+            mark_task_done(chat_id, title)
+            mark_reminder_done(chat_id, title)
 
     elif intent == "update_memory":
         if llm_response.entities:
@@ -223,7 +230,7 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         print(f"[LLM] Entities: {llm_response.entities}")
         print(f"[LLM] Memory: {llm_response.memory_summary}")
 
-        route_intent(chat_id, llm_response)
+        route_intent(chat_id, llm_response, user_input)
 
         return llm_response.reply_to_user
 
