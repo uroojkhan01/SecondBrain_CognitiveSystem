@@ -74,15 +74,27 @@ async def test_database_attached_flow():
         assert p_type == "database"
         
         parent = {"type": f"{p_type}_id", f"{p_type}_id": parent_id}
-        properties = {"Set Reminder?": {"checkbox": False}}
-        title_val = "Test Captured Input"
+        # Simulate LLM sending an incorrect title key "title"
+        properties = {
+            "Set Reminder?": {"checkbox": False},
+            "title": {"title": [{"text": {"content": "Test Captured Input"}}]}
+        }
         
         # Override title resolver to return 'Content/Message'
         agent._get_title_property_name = AsyncMock(return_value="Content/Message")
         
         if p_type == "database":
             title_col = await agent._get_title_property_name(parent_id)
-            properties[title_col] = {"title": [{"text": {"content": str(title_val)}}]}
+            existing_title_val = None
+            keys_to_remove = []
+            for k, v in list(properties.items()):
+                if isinstance(v, dict) and "title" in v:
+                    existing_title_val = v["title"]
+                    if k != title_col:
+                        keys_to_remove.append(k)
+            for k in keys_to_remove:
+                del properties[k]
+            properties[title_col] = {"title": existing_title_val}
             
         assert parent == {"type": "database_id", "database_id": "db_id_123"}
         assert properties == {
@@ -91,7 +103,7 @@ async def test_database_attached_flow():
         }
         await agent.create_page(parent, properties)
         agent.client.pages.create.assert_called_once_with(parent=parent, properties=properties)
-        print("✅ add_database_page dynamically maps title for database parent successfully")
+        print("✅ add_database_page dynamically maps and cleans title for database parent successfully")
 
 
 async def test_page_attached_flow():

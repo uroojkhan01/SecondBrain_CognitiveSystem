@@ -219,15 +219,28 @@ class NotionWorkflowManager:
                                 properties = {"title": [{"text": {"content": str(title_val)}}]}
                         elif p_type == "database":
                             title_col = await self.notion_agent._get_title_property_name(parent_id)
-                            # Check if the title column is not already defined in properties
-                            title_in_props = False
-                            for k, v in properties.items():
+                            
+                            # Find if there is any key in properties representing the title
+                            existing_title_val = None
+                            keys_to_remove = []
+                            for k, v in list(properties.items()):
                                 if isinstance(v, dict) and "title" in v:
-                                    title_in_props = True
-                                    break
-                            if not title_in_props:
-                                title_val = function_args.get("title", "")
-                                properties[title_col] = {"title": [{"text": {"content": str(title_val)}}]}
+                                    existing_title_val = v["title"]
+                                    if k != title_col:
+                                        keys_to_remove.append(k)
+                            
+                            # Clean up incorrect title keys
+                            for k in keys_to_remove:
+                                del properties[k]
+                            
+                            # Set the correct title column
+                            if not existing_title_val:
+                                existing_title_val = function_args.get("title", "")
+                            
+                            if isinstance(existing_title_val, list):
+                                properties[title_col] = {"title": existing_title_val}
+                            else:
+                                properties[title_col] = {"title": [{"text": {"content": str(existing_title_val)}}]}
                         
                         result = await self.notion_agent.create_page(parent, properties)
                     elif function_name == "update_page":
@@ -409,12 +422,40 @@ class NotionWorkflowManager:
         if capture_id == "UNKNOWN" and hasattr(self.notion_agent, "active_database_id") and self.notion_agent.active_database_id:
             capture_id = self.notion_agent.active_database_id
 
+        # Get current time in Europe/Berlin
+        import pytz
+        berlin_tz = pytz.timezone("Europe/Berlin")
+        now_berlin = datetime.now(berlin_tz)
+        current_time_str = now_berlin.strftime("%Y-%m-%dT%H:%M:%S%z")
+        # Format the timezone offset correctly as +02:00
+        if len(current_time_str) > 19 and current_time_str[-2] != ":":
+            current_time_str = current_time_str[:-2] + ":" + current_time_str[-2:]
+
+        schema_description = f"""
+Database Schema Reference for '📝 Notes & Capture':
+- Title Column: 'Content/Message' (MUST contain the user's raw input / text)
+- Date Columns: 
+  - 'Capture Timestamp': set to the current timestamp ({current_time_str}) in standard shape: {{"date": {{"start": "{current_time_str}"}}}}
+  - 'Reminder Date/Time': set if a specific reminder date/time is extracted in shape: {{"date": {{"start": "ISO-Date-String"}}}}
+- Checkbox Column: 'Set Reminder?' (set to true if 'Reminder Date/Time' is present, otherwise false, in shape: {{"checkbox": true/false}})
+- Select Columns:
+  - 'Processed Status': MUST be 'Unprocessed' (shape: {{"select": {{"name": "Unprocessed"}}}})
+  - 'Proposed Area (AI)': Deduces the most relevant area (shape: {{"select": {{"name": "OptionName"}}}}). Options: 'Health & Fitness', 'Finance & Wealth', 'Career & Professional', 'Personal Growth', 'Home & Lifestyle'
+  - 'Input Type': Deduces the format (shape: {{"select": {{"name": "OptionName"}}}}). Options: 'Text', 'Link', 'Voice Note', 'Image'
+  - 'Actionability': Deduces action level (shape: {{"select": {{"name": "OptionName"}}}}). Options: 'Actionable Task', 'Reference Only', 'Someday/Maybe'
+- Rich Text Column: 'Proposed Project (AI)' (deduces a short project title if input is actionable, otherwise empty, in shape: {{"rich_text": [{{"text": {{"content": "project title"}}}}]}})
+"""
+
+        system_prompt = ROUTING_PROMPT + "\n\n" + schema_description
+
         prompt = (
-            f"New user input: '{text}'. Extracted Data: {extracted_data}. "
-            f"ACTION: Insert this into the Capture Database (ID: {capture_id})."
+            f"Current Timestamp: {current_time_str}\n"
+            f"New user input: '{text}'\n"
+            f"Extracted Data from LLM Conversation: {json.dumps(extracted_data)}\n"
+            f"ACTION: Create a page in the Capture Database (ID: {capture_id}) using the `add_database_page` tool."
         )
         logger.info(f"NotionWorkflow LLM: Routing raw input to Capture...")
-        await self._run_groq_agent(ROUTING_PROMPT, prompt)
+        await self._run_groq_agent(system_prompt, prompt)
         return {"id": "llm-handled", "url": "notion.so"}
 
     async def run_automations(self, chat_id: int):
