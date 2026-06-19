@@ -1,6 +1,7 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
-from assistant_backend_1.helpers import  load_users, save_users 
+# from assistant_backend_1.helpers import  load_users, save_users 
+from assistant_backend_1.models.db_helpers import save_notion_user_token, save_notion_user_database, load_users
 import requests
 from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
 from fastapi.responses import HTMLResponse
@@ -90,17 +91,20 @@ async def notion_oauth_callback(request: Request):
             "schema": schema  # ← store schema
         })
 
-    # Save token and databases
-    users = load_users()
-    if str(chat_id) not in users:
-        users[str(chat_id)] = {}
+    # # Save token and databases
+    # users = load_users()
+    # if str(chat_id) not in users:
+    #     users[str(chat_id)] = {}
 
-    users[str(chat_id)]["notion"] = {
-        "token": access_token,
-        "active_database_id": database_list[0]["id"] if database_list else None,
-        "database_ids": database_list
-    }
-    save_users(users)
+    # users[str(chat_id)]["notion"] = {
+    #     "token": access_token,
+    #     "active_database_id": database_list[0]["id"] if database_list else None,
+    #     "database_ids": database_list
+    # }
+    # save_users(users)
+    save_notion_user_token(chat_id, access_token)
+    for db in database_list:
+        save_notion_user_database(chat_id, db["id"], db["name"])
 
     # Notify user
     if len(database_list) > 1:
