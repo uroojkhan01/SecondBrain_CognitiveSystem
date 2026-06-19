@@ -410,3 +410,90 @@ def update_reminder(reminder_id: str, text: str = None, remind_at: str = None) -
 
 def delete_reminder(reminder_id: str) -> None:
     db.table("reminders").delete().eq("id", reminder_id).execute()
+
+# captures
+
+def save_capture(
+    user_id: str,
+    raw_text: str,
+    message_id: str = None,
+    source: str = "telegram"
+) -> dict:
+    """Store raw incoming message before processing."""
+    result = db.table("captures").insert(
+        {
+            "user_id": user_id,
+            "message_id": message_id,
+            "raw_text": raw_text,
+            "source": source,
+        }
+    ).execute()
+    return result.data[0]
+
+
+def mark_capture_processed(capture_id: str) -> dict:
+    result = db.table("captures").update(
+        {"processed": True}
+    ).eq("id", capture_id).execute()
+    return result.data[0]
+
+
+def get_unprocessed_captures(user_id: str) -> list:
+    result = (
+        db.table("captures")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("processed", False)
+        .order("created_at")
+        .execute()
+    )
+    return result.data
+
+
+# RAG / embeddings
+
+def save_memory_with_embedding(
+    user_id: str,
+    summary: str,
+    embedding: list,
+    message_id: str = None,
+    category: str = None,
+    event_date: str = None,
+    neo4j_node_id: str = None
+) -> dict:
+    """Save memory with vector embedding for semantic search."""
+    result = db.table("memories").insert(
+        {
+            "user_id": user_id,
+            "message_id": message_id,
+            "summary": summary,
+            "category": category,
+            "event_date": event_date,
+            "neo4j_node_id": neo4j_node_id,
+            "embedding": embedding,
+        }
+    ).execute()
+    return result.data[0]
+
+
+def search_memories_by_embedding(
+    user_id: str,
+    query_embedding: list,
+    limit: int = 5,
+    threshold: float = 0.7
+) -> list:
+    """
+    Semantic search across memories using cosine similarity.
+    query_embedding: vector from the same embedding model used to save.
+    threshold: minimum similarity score (0-1), higher = more similar.
+    """
+    result = db.rpc(
+        "match_memories",
+        {
+            "query_embedding": query_embedding,
+            "match_user_id": user_id,
+            "match_threshold": threshold,
+            "match_count": limit,
+        }
+    ).execute()
+    return result.data

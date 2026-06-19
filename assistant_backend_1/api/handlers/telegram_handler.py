@@ -1,6 +1,6 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
-from assistant_backend_1.helpers import save_user,get_oauth_url, load_users,is_notion_connected 
+from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected
 
 from assistant_backend_1.features_services.telegram import (
     send_message,
@@ -8,6 +8,7 @@ from assistant_backend_1.features_services.telegram import (
 )
 from assistant_backend_1.features_services.voice_to_text import transcribe_audio_file
 import asyncio
+from assistant_backend_1.features_services.llm_conversation import process_user_input
 
 
 async def telegram_webhook(request: Request):
@@ -24,7 +25,6 @@ async def telegram_webhook(request: Request):
     if "voice" in message:
 
         voice = message["voice"]
-
         voice_file_id = voice["file_id"]
         voice_duration = voice["duration"]
 
@@ -36,19 +36,21 @@ async def telegram_webhook(request: Request):
             transcribe_audio_file,
             audio_path
         )
-        
-        reply = f"You said (voice): {transcript}"
-        print("this is reply", reply)
+
+        user_input = transcript
+        print("this is reply", user_input)
 
     else:
 
         text = message.get("text", "")
-
         print(f"Text message received: {text}")
-
-        reply = f"You said: {text}"
+        user_input = text
 
     chat_id = str(message["chat"]["id"])
+
+    ### process user input through llm model ###
+    reply = process_user_input(chat_id, user_input)
+
     first_name = message["chat"].get("first_name")
     username = message["chat"].get("username")
     text = message.get("text", "")
@@ -57,7 +59,6 @@ async def telegram_webhook(request: Request):
     save_user(chat_id, first_name, username)
     print(f"Current users: {load_users()}")
 
-    
     if not is_notion_connected(chat_id):
         oauth_url = get_oauth_url(chat_id)
         await send_message(
@@ -68,7 +69,7 @@ async def telegram_webhook(request: Request):
         return {"status": "ok"}
 
     # Notion is connected — handle message normally
+
     print("sending message back to user")
     await send_message(chat_id, reply)
     return {"status": "ok"}
-   

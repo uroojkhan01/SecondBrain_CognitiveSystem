@@ -10,6 +10,27 @@ from fastapi.responses import HTMLResponse
 # NOTION OAUTH CALLBACK
 # ============================================
 
+def fetch_database_schema(token: str, database_id: str) -> dict:
+    """Fetch column names and types from a Notion database"""
+    url = f"https://api.notion.com/v1/databases/{database_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        schema = {}
+        for col_name, col_data in data.get("properties", {}).items():
+            schema[col_name] = col_data.get("type")
+        
+        print(f"📋 Schema fetched: {schema}")
+        return schema
+    except Exception as e:
+        print(f"❌ Error fetching schema: {e}")
+        return {}
+
 async def notion_oauth_callback(request: Request):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -52,15 +73,21 @@ async def notion_oauth_callback(request: Request):
     print(f"Found {len(databases)} databases")
 
     # Build database list
+    
     database_list = []
     for db in databases:
         try:
             db_name = db["title"][0]["text"]["content"]
         except:
             db_name = "Untitled"
+    
+    # ← Fetch schema for each database
+        schema = fetch_database_schema(access_token, db["id"])
+    
         database_list.append({
             "id": db["id"],
-            "name": db_name
+            "name": db_name,
+            "schema": schema  # ← store schema
         })
 
     # Save token and databases
