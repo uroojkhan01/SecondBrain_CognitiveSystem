@@ -53,6 +53,26 @@ Example: if user says 3pm tomorrow and today is {now_berlin.strftime('%Y-%m-%d')
     return f"{CLASSIFIER_SYSTEM_PROMPT}{time_block}\n\n{context_block}"
 
 
+def log_to_notion_background(chat_id: str, text: str, intent: str, extracted_data: dict):
+    """Asynchronously logs user input to Notion capture database in the background."""
+    agent = NotionAgent()
+    workflow_manager = NotionWorkflowManager(agent)
+    
+    coro = workflow_manager.route_and_log_to_notion(
+        text=text,
+        intent=intent,
+        extracted_data=extracted_data,
+        emotion="neutral",
+        chat_id=chat_id
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro)
+    except RuntimeError:
+        # Fallback if no event loop is running (e.g. CLI or test)
+        asyncio.run(coro)
+
+
 def handle_brain_dump(chat_id: str, items: list):
     """Handle multiple intents extracted from a brain dump."""
     for item in items:
@@ -63,17 +83,35 @@ def handle_brain_dump(chat_id: str, items: list):
                 item["task"].get("title"),
                 item["task"].get("due")
             )
+            log_to_notion_background(
+                chat_id,
+                item["task"].get("title"),
+                intent,
+                item["task"]
+            )
         elif intent == "set_reminder" and item.get("reminder"):
             save_reminder(
                 chat_id,
                 item["reminder"].get("text"),
                 item["reminder"].get("datetime")
             )
+            log_to_notion_background(
+                chat_id,
+                item["reminder"].get("text"),
+                intent,
+                item["reminder"]
+            )
         elif intent == "save_memory" and item.get("memory_summary"):
             save_memory(
                 chat_id,
                 item["memory_summary"],
                 item.get("entities", [])
+            )
+            log_to_notion_background(
+                chat_id,
+                item.get("memory_summary"),
+                intent,
+                {"memory_summary": item.get("memory_summary"), "entities": item.get("entities", [])}
             )
 
 
@@ -92,6 +130,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 llm_response.memory_summary,
                 llm_response.entities
             )
+            log_to_notion_background(
+                chat_id,
+                user_input,
+                intent,
+                {"memory_summary": llm_response.memory_summary, "entities": llm_response.entities}
+            )
 
     elif intent == "vent":
         # Empathy reply but still save if there's personal content
@@ -100,6 +144,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 chat_id,
                 llm_response.memory_summary,
                 llm_response.entities
+            )
+            log_to_notion_background(
+                chat_id,
+                user_input,
+                intent,
+                {"memory_summary": llm_response.memory_summary, "entities": llm_response.entities}
             )
 
     elif intent == "set_reminder":
@@ -110,6 +160,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
             )
+            log_to_notion_background(
+                chat_id,
+                user_input,
+                intent,
+                llm_response.reminder
+            )
 
     elif intent == "create_task":
         if llm_response.task:
@@ -119,23 +175,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
             )
-            # Route and log task to Notion via NotionWorkflowManager
-            agent = NotionAgent()
-            workflow_manager = NotionWorkflowManager(agent)
-            
-            coro = workflow_manager.route_and_log_to_notion(
-                text=user_input,
-                intent=intent,
-                extracted_data=llm_response.task,
-                emotion="neutral",
-                chat_id=chat_id
+            log_to_notion_background(
+                chat_id,
+                user_input,
+                intent,
+                llm_response.task
             )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                # Fallback if no event loop is running (e.g. CLI or test)
-                asyncio.run(coro)
 
     elif intent == "habit_track":
         if llm_response.habit:
