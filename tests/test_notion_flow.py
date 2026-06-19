@@ -58,10 +58,40 @@ async def test_database_attached_flow():
             mock_ensure_db.assert_not_called()
             print("✅ build_workspace_architecture correctly skipped for database root")
 
+        # Restore client mocks (since set_user_credentials inside build_workspace_architecture overwrote them)
+        agent.client = AsyncMock()
+        agent.client.databases.retrieve = AsyncMock(return_value={"id": "db_id_123", "object": "database"})
+        agent.client.pages.create = AsyncMock(return_value={"id": "new_page_id"})
+
         # Verify get_id_type works for database
         id_type = await agent.get_id_type("db_id_123")
         assert id_type == "database"
         print("✅ get_id_type resolved database type successfully")
+
+        # Simulate add_database_page tool handler when parent is a database
+        parent_id = "db_id_123"
+        p_type = await agent.get_id_type(parent_id)
+        assert p_type == "database"
+        
+        parent = {"type": f"{p_type}_id", f"{p_type}_id": parent_id}
+        properties = {"Set Reminder?": {"checkbox": False}}
+        title_val = "Test Captured Input"
+        
+        # Override title resolver to return 'Content/Message'
+        agent._get_title_property_name = AsyncMock(return_value="Content/Message")
+        
+        if p_type == "database":
+            title_col = await agent._get_title_property_name(parent_id)
+            properties[title_col] = {"title": [{"text": {"content": str(title_val)}}]}
+            
+        assert parent == {"type": "database_id", "database_id": "db_id_123"}
+        assert properties == {
+            "Set Reminder?": {"checkbox": False},
+            "Content/Message": {"title": [{"text": {"content": "Test Captured Input"}}]}
+        }
+        await agent.create_page(parent, properties)
+        agent.client.pages.create.assert_called_once_with(parent=parent, properties=properties)
+        print("✅ add_database_page dynamically maps title for database parent successfully")
 
 
 async def test_page_attached_flow():

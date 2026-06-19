@@ -217,6 +217,17 @@ class NotionWorkflowManager:
                                 properties = {"title": title_val}
                             else:
                                 properties = {"title": [{"text": {"content": str(title_val)}}]}
+                        elif p_type == "database":
+                            title_col = await self.notion_agent._get_title_property_name(parent_id)
+                            # Check if the title column is not already defined in properties
+                            title_in_props = False
+                            for k, v in properties.items():
+                                if isinstance(v, dict) and "title" in v:
+                                    title_in_props = True
+                                    break
+                            if not title_in_props:
+                                title_val = function_args.get("title", "")
+                                properties[title_col] = {"title": [{"text": {"content": str(title_val)}}]}
                         
                         result = await self.notion_agent.create_page(parent, properties)
                     elif function_name == "update_page":
