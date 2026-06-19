@@ -334,16 +334,62 @@ class NotionWorkflowManager:
         """Resolves target database metadata, building the workspace architecture if missing."""
         if chat_id:
             self.set_user_credentials(chat_id)
-        await self.build_workspace_architecture(chat_id=chat_id)
+        has_capture = "📝 Notes & Capture" in self.notion_agent.db_cache
+        if not has_capture and getattr(self.notion_agent, "active_item_type", "database") != "database":
+            await self.build_workspace_architecture(chat_id=chat_id)
         mapping = {"capture": "📝 Notes & Capture", "projects": "Master Projects DB", "tasks": "☑️ Tasks and To Dos"}
         title = mapping.get(db_type, db_type)
         ids = await self.notion_agent.get_database_ids(title)
         return ids if ids else {"database_id": "mock", "data_source_id": "mock"}
 
+    async def get_all_database_ids(self, chat_id: Optional[str] = None) -> Dict[str, str]:
+        """Ensures workspace exists and returns a dictionary of all database titles/names to their IDs."""
+        if chat_id:
+            self.set_user_credentials(chat_id)
+        
+        # Check cache heuristic: if "📝 Notes & Capture" is not cached, build architecture first
+        has_capture = "📝 Notes & Capture" in self.notion_agent.db_cache
+        if not has_capture and getattr(self.notion_agent, "active_item_type", "database") != "database":
+            await self.build_workspace_architecture(chat_id=chat_id)
+        
+        db_names = [
+            "📝 Notes & Capture",
+            "Health & Fitness",
+            "Finance & Wealth",
+            "Career & Professional",
+            "Personal Growth & Learning",
+            "Home & Lifestyle",
+            "Master Projects DB",
+            "☑️ Tasks and To Dos"
+        ]
+        
+        ids = {}
+        for name in db_names:
+            db_info = await self.notion_agent.get_database_ids(name)
+            if db_info:
+                ids[name] = db_info.get("database_id")
+            else:
+                # Check cache directly
+                cache_entry = self.notion_agent.db_cache.get(name)
+                if cache_entry:
+                    ids[name] = cache_entry.get("database_id") if isinstance(cache_entry, dict) else cache_entry
+                else:
+                    ids[name] = None
+                    
+        # Fallback to active database ID if Capture DB is not found and active is a database
+        if not ids.get("📝 Notes & Capture") and getattr(self.notion_agent, "active_item_type", "database") == "database":
+            ids["📝 Notes & Capture"] = getattr(self.notion_agent, "active_database_id", None)
+            
+        return ids
+
     async def route_and_log_to_notion(self, text: str, intent: str, extracted_data: Dict[str, Any], emotion: str, chat_id: Optional[str] = None) -> Dict[str, Any]:
         """Runs the routing agent to record raw input inside the capture DB for a user."""
         if chat_id:
             self.set_user_credentials(chat_id)
+            # Ensure workspace architecture is built if missing from cache
+            has_capture = "📝 Notes & Capture" in self.notion_agent.db_cache
+            if not has_capture and getattr(self.notion_agent, "active_item_type", "database") != "database":
+                await self.build_workspace_architecture(chat_id)
 
         capture_ids = await self.notion_agent.get_database_ids("📝 Notes & Capture")
         capture_id = list(capture_ids.values())[0] if capture_ids else "UNKNOWN"
@@ -363,9 +409,76 @@ class NotionWorkflowManager:
     async def run_automations(self, chat_id: int):
         """Runs the automation agent tasks (Sort & Synthesize) for a user."""
         self.set_user_credentials(chat_id)
+        
+        if getattr(self.notion_agent, "active_item_type", "database") == "database":
+            logger.info("Active attached item is a database. Sorting and synthesizing automations are not applicable.")
+            return
             
         logger.info("NotionWorkflow LLM: Running Internal Automations (Sort & Synthesize)...")
-        await self._run_groq_agent(AUTOMATION_PROMPT, "Start the Phase 2 and Phase 3 internal review loops.")
+        
+        db_ids = await self.get_all_database_ids(str(chat_id))
+        
+        # Format the database list for the LLM context
+        db_info_str = "\n".join([f"- '{name}': {db_id}" for name, db_id in db_ids.items() if db_id])
+        
+        schema_info = """
+Database Schema Reference:
+1. '📝 Notes & Capture':
+   Properties:
+   - 'Content/Message': title
+   - 'Processed Status': select (options: 'Unprocessed', 'Moved to Area', 'Archived')
+   - 'Proposed Area (AI)': select (options: 'Health & Fitness', 'Finance & Wealth', 'Career & Professional', 'Personal Growth', 'Home & Lifestyle')
+   - 'Proposed Project (AI)': rich_text
+   - 'Input Type': select (options: 'Text', 'Link', 'Voice Note', 'Image')
+   - 'Actionability': select (options: 'Actionable Task', 'Reference Only', 'Someday/Maybe')
+
+2. Area Databases ('Health & Fitness', 'Finance & Wealth', 'Career & Professional', 'Personal Growth & Learning', 'Home & Lifestyle'):
+   Properties:
+   - 'Name': title
+   - 'Date Logged': date (format: YYYY-MM-DD)
+   - 'AI Executive Summary': rich_text
+   - 'Source Capture Link': relation (points to '📝 Notes & Capture' page)
+   Specific properties per Area:
+   - 'Health & Fitness': 'Sub-Category' (select: Nutrition, Workout, Sleep, Mental Health), 'Biometric/Value' (rich_text), 'Energy Level' (select: High, Medium, Low)
+   - 'Finance & Wealth': 'Transaction Type' (select: Expense Idea, Income Stream, Investment Research), 'Estimated Amount' (number), 'Financial Entity' (rich_text)
+   - 'Career & Professional': 'Professional Domain' (select: Networking, Skill Acquisition, Work Project), 'Associated Company/Person' (rich_text), 'Impact Score' (select: High Impact, Routine Maintenance)
+   - 'Personal Growth & Learning': 'Media Format' (select: Book, Article, Podcast, Course), 'Key Takeaway' (rich_text), 'Application' (rich_text)
+   - 'Home & Lifestyle': 'Asset/Domain' (select: Vehicle, Apartment, Hobbies, Family), 'Cost Estimate' (number), 'Urgency' (select: Immediate, Seasonal, Low Priority)
+
+3. 'Master Projects DB':
+   Properties:
+   - 'Project Name': title
+   - 'The 'Big Why'': rich_text
+   - 'Target Deadline': date (format: YYYY-MM-DD)
+   - 'Status': select (options: 'Proposed', 'Active', 'Paused', 'Completed')
+   - 'Progress Bar': number
+   - 'Celebration Reward': rich_text
+   - Relations to Area Databases:
+     - 'Related Health & Fitness': relation
+     - 'Related Finance & Wealth': relation
+     - 'Related Career & Professional': relation
+     - 'Related Personal Growth & Learning': relation
+     - 'Related Home & Lifestyle': relation
+
+4. '☑️ Tasks and To Dos':
+   Properties:
+   - 'Task Name': title
+   - 'Execution Date': date (format: YYYY-MM-DD)
+   - 'Requirement Level': select (options: 'Mandatory', 'Optional')
+   - 'Criticality': select (options: 'P1 - Critical', 'P2 - Important', 'P3 - Minor')
+   - 'Energy Required': select (options: 'High Focus', 'Medium', 'Low/Braindead')
+   - 'Time Block': select (options: 'Morning', 'Afternoon', 'Evening')
+   - 'Estimated Duration': number
+   - 'Parent Project': relation (points to 'Master Projects DB' page)
+"""
+
+        system_prompt = (
+            AUTOMATION_PROMPT + 
+            f"\n\nActive Notion Database IDs for this user:\n{db_info_str}\n" +
+            schema_info
+        )
+        
+        await self._run_groq_agent(system_prompt, "Start the Phase 2 and Phase 3 internal review loops.")
 
     def get_current_lifecycle_phase(self) -> int:
         return 1

@@ -1,6 +1,6 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
-from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected
+from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected, save_users
 
 from assistant_backend_1.features_services.telegram import (
     send_message,
@@ -48,6 +48,29 @@ async def telegram_webhook(request: Request):
 
     chat_id = str(message["chat"]["id"])
 
+    # Ensure user exists in user.json
+    first_name = message["chat"].get("first_name")
+    username = message["chat"].get("username")
+    save_user(chat_id, first_name, username)
+
+    # Check if the input is a digit selection for Notion active database
+    if user_input.strip().isdigit():
+        current_users = load_users()
+        user_data = current_users.get(str(chat_id), {})
+        notion_data = user_data.get("notion", {})
+        database_list = notion_data.get("database_ids", [])
+        if database_list:
+            index = int(user_input.strip()) - 1
+            if 0 <= index < len(database_list):
+                selected_db = database_list[index]
+                notion_data["active_database_id"] = selected_db["id"]
+                save_users(current_users)
+                await send_message(
+                    chat_id,
+                    f"✅ Active Notion connection set to: *{selected_db['name']}* ({selected_db['type'].capitalize()})"
+                )
+                return {"status": "ok"}
+
     ### process user input through llm model ###
     from assistant_backend_1.config import ENABLE_LLM_API
     if ENABLE_LLM_API:
@@ -55,12 +78,6 @@ async def telegram_webhook(request: Request):
     else:
         reply = f"[LLM API Disabled] You said: {user_input}"
 
-    first_name = message["chat"].get("first_name")
-    username = message["chat"].get("username")
-    text = message.get("text", "")
-
-    # Save user to JSON
-    save_user(chat_id, first_name, username)
     current_users = load_users()
     print(f"Current users: {current_users}")
 

@@ -198,11 +198,105 @@ async def test_telegram_webhook_checks():
         print("✅ Correctly prompted to attach databases/pages when active_database_id is missing")
 
 
+async def test_telegram_selection_flow():
+    print("\n--- Testing Telegram Webhook digit selection parser ---")
+    from assistant_backend_1.api.handlers.telegram_handler import telegram_webhook
+    
+    chat_id = "test_selection_user"
+    mock_user_data = {
+        str(chat_id): {
+            "notion": {
+                "token": "fake_token",
+                "active_database_id": "db_id_123",
+                "database_ids": [
+                    {"id": "db_id_123", "name": "First DB", "type": "database", "schema": {}},
+                    {"id": "db_id_456", "name": "Second DB", "type": "database", "schema": {}}
+                ]
+            }
+        }
+    }
+    
+    mock_request = AsyncMock()
+    mock_request.json = AsyncMock(return_value={
+        "message": {
+            "chat": {"id": chat_id, "first_name": "Test", "username": "test"},
+            "text": "2"
+        }
+    })
+    
+    with patch("assistant_backend_1.helpers.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.api.handlers.telegram_handler.save_user"), \
+         patch("assistant_backend_1.helpers.save_users") as mock_save_users, \
+         patch("assistant_backend_1.api.handlers.telegram_handler.save_users") as mock_save_users_2, \
+         patch("assistant_backend_1.api.handlers.telegram_handler.send_message") as mock_send:
+        
+        await telegram_webhook(mock_request)
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][1]
+        assert "Active Notion connection set to" in sent_message
+        assert "Second DB" in sent_message
+        assert mock_user_data[str(chat_id)]["notion"]["active_database_id"] == "db_id_456"
+        print("✅ Correctly updated active_database_id on digit input selection")
+
+
+async def test_get_all_database_ids():
+    print("\n--- Testing get_all_database_ids ---")
+    chat_id = "test_user_page"
+    mock_user_data = {
+        str(chat_id): {
+            "notion": {
+                "token": "fake_token",
+                "active_database_id": "page_id_456",
+                "database_ids": [
+                    {"id": "page_id_456", "name": "My Page Root", "type": "page", "schema": {}}
+                ]
+            }
+        }
+    }
+    
+    with patch("assistant_backend_1.helpers.load_users", return_value=mock_user_data), \
+         patch("assistant_backend_1.features_services.notion_workflow.load_users", return_value=mock_user_data):
+        
+        agent = NotionAgent()
+        workflow = NotionWorkflowManager(agent)
+        agent._load_cache = MagicMock(return_value={"📝 Notes & Capture": {"database_id": "db_capture"}})
+        workflow.set_user_credentials(chat_id)
+        
+        agent.client = AsyncMock()
+        agent.client.pages.retrieve = AsyncMock(return_value={"id": "page_id_456", "object": "page"})
+        
+        # Mock get_database_ids to return fake IDs for the schema databases
+        fake_db_ids = {
+            "📝 Notes & Capture": {"database_id": "db_capture"},
+            "Health & Fitness": {"database_id": "db_health"},
+            "Finance & Wealth": {"database_id": "db_finance"},
+            "Career & Professional": {"database_id": "db_career"},
+            "Personal Growth & Learning": {"database_id": "db_growth"},
+            "Home & Lifestyle": {"database_id": "db_home"},
+            "Master Projects DB": {"database_id": "db_projects"},
+            "☑️ Tasks and To Dos": {"database_id": "db_tasks"}
+        }
+        
+        async def mock_get_db_ids(name):
+            return fake_db_ids.get(name)
+            
+        agent.get_database_ids = mock_get_db_ids
+        
+        db_ids = await workflow.get_all_database_ids(chat_id)
+        assert db_ids["📝 Notes & Capture"] == "db_capture"
+        assert db_ids["Health & Fitness"] == "db_health"
+        assert db_ids["Master Projects DB"] == "db_projects"
+        print("✅ get_all_database_ids resolved all database IDs correctly")
+
+
 async def main():
     try:
         await test_database_attached_flow()
         await test_page_attached_flow()
         await test_telegram_webhook_checks()
+        await test_telegram_selection_flow()
+        await test_get_all_database_ids()
         print("\n🎉 All Notion flow tests PASSED successfully!")
     except AssertionError as e:
         print(f"\n❌ Assertion failed during tests: {e}")
