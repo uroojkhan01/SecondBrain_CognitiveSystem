@@ -30,3 +30,4 @@ pytz
 schedule
 groq
 neo4j
+notion-client
