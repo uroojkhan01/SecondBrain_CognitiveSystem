@@ -1,89 +1,94 @@
-import os
-from supabase import create_client, Client
+# db.py
+# Database client using SQLAlchemy + psycopg
+# All functions are synchronous for simplicity
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
 from dotenv import load_dotenv
+import os
+from datetime import datetime, timezone
+
+from assistant_backend_1.models.database import (
+    User, Message, Capture, Task, Reminder, VoiceMessage, NotionDatabase
+)
 
 load_dotenv()
 
-
-def get_client() -> Client:
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_KEY")
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY are not set in .env")
-    return create_client(url, key)
+engine = create_engine(os.getenv("DATABASE_URL"))
+SessionLocal = sessionmaker(bind=engine)
 
 
-db: Client = get_client()
+def get_session() -> Session:
+    return SessionLocal()
 
 
-# users
+#  Users 
 
 def upsert_user(chat_id: str, first_name: str = None, username: str = None) -> dict:
-    """
-    Insert user if they don't exist, otherwise update their name/username.
-    Called on every incoming Telegram message.
-    """
-    result = db.table("users").upsert(
-        {
-            "chat_id": chat_id,
-            "first_name": first_name,
-            "username": username,
-        },
-        on_conflict="chat_id"
-    ).execute()
-    return result.data[0]
+    """Insert user if not exists, update name/username if they do."""
+    with get_session() as session:
+        user = session.query(User).filter_by(chat_id=chat_id).first()
+        if user:
+            user.first_name = first_name
+            user.username = username
+        else:
+            user = User(chat_id=chat_id, first_name=first_name, username=username)
+            session.add(user)
+        session.commit()
+        session.refresh(user)
+        return _user_to_dict(user)
 
 
 def get_user_by_chat_id(chat_id: str) -> dict | None:
-    result = db.table("users").select("*").eq("chat_id", chat_id).execute()
-    return result.data[0] if result.data else None
+    with get_session() as session:
+        user = session.query(User).filter_by(chat_id=chat_id).first()
+        return _user_to_dict(user) if user else None
 
 
 def set_notion_connected(user_id: str, connected: bool) -> dict:
-    result = db.table("users").update(
-        {"notion_connected": connected}
-    ).eq("id", user_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        user.notion_connected = connected
+        session.commit()
+        session.refresh(user)
+        return _user_to_dict(user)
+
 
 def save_notion_token(user_id: str, token: str) -> dict:
-    result = db.table("users").update(
-        {"notion_access_token": token}
-    ).eq("id", user_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        user.notion_access_token = token
+        session.commit()
+        session.refresh(user)
+        return _user_to_dict(user)
 
-# notion_databases
+
+#  Notion Databases 
 
 def save_notion_database(user_id: str, notion_db_id: str, name: str = None) -> dict:
-    """
-    Store a Notion database ID for a user after they connect their Notion account.
-    notion_db_id is the ID from the Notion API.
-    """
-    result = db.table("notion_databases").insert(
-        {
-            "user_id": user_id,
-            "notion_db_id": notion_db_id,
-            "name": name,
-        }
-    ).execute()
-    return result.data[0]
+    with get_session() as session:
+        notion_db = NotionDatabase(user_id=user_id, notion_db_id=notion_db_id, name=name)
+        session.add(notion_db)
+        session.commit()
+        session.refresh(notion_db)
+        return _to_dict(notion_db)
 
 
 def get_notion_databases(user_id: str) -> list:
-    result = (
-        db.table("notion_databases")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at")
-        .execute()
-    )
-    return result.data
+    with get_session() as session:
+        dbs = session.query(NotionDatabase).filter_by(user_id=user_id).order_by(NotionDatabase.created_at).all()
+        return [_to_dict(db) for db in dbs]
 
 
 def delete_notion_database(notion_database_id: str) -> None:
-    db.table("notion_databases").delete().eq("id", notion_database_id).execute()
+    with get_session() as session:
+        db = session.query(NotionDatabase).filter_by(id=notion_database_id).first()
+        if db:
+            session.delete(db)
+            session.commit()
 
 
-# messages
+#  Messages 
 
 def save_message(
     user_id: str,
@@ -92,32 +97,63 @@ def save_message(
     intent: str = None,
     llm_raw_response: dict = None
 ) -> dict:
-    result = db.table("messages").insert(
-        {
-            "user_id": user_id,
-            "raw_input": raw_input,
-            "input_type": input_type,
-            "intent": intent,
-            "llm_raw_response": llm_raw_response,
-        }
-    ).execute()
-    return result.data[0]
+    with get_session() as session:
+        msg = Message(
+            user_id=user_id,
+            raw_input=raw_input,
+            input_type=input_type,
+            intent=intent,
+            llm_raw_response=llm_raw_response
+        )
+        session.add(msg)
+        session.commit()
+        session.refresh(msg)
+        return _to_dict(msg)
 
 
 def get_recent_messages(user_id: str, limit: int = 10) -> list:
-    """Returns most recent messages for a user, useful for LLM conversation context."""
-    result = (
-        db.table("messages")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return result.data
+    with get_session() as session:
+        msgs = (
+            session.query(Message)
+            .filter_by(user_id=user_id)
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [_to_dict(m) for m in msgs]
 
 
-# voice_messages
+#  Captures 
+
+def save_capture(
+    user_id: str,
+    raw_text: str,
+    message_id: str = None,
+    source: str = "telegram"
+) -> dict:
+    with get_session() as session:
+        capture = Capture(
+            user_id=user_id,
+            raw_text=raw_text,
+            message_id=message_id,
+            source=source
+        )
+        session.add(capture)
+        session.commit()
+        session.refresh(capture)
+        return _to_dict(capture)
+
+
+def mark_capture_processed(capture_id: str) -> dict:
+    with get_session() as session:
+        capture = session.query(Capture).filter_by(id=capture_id).first()
+        capture.processed = True
+        session.commit()
+        session.refresh(capture)
+        return _to_dict(capture)
+
+
+#  Voice Messages 
 
 def save_voice_message(
     message_id: str,
@@ -125,125 +161,29 @@ def save_voice_message(
     telegram_file_id: str = None,
     transcription: str = None
 ) -> dict:
-    """
-    Store voice note metadata linked to a message.
-    telegram_file_id: file ID from Telegram, used to fetch audio if needed.
-    transcription: text output from the transcription agent, can be updated later.
-    """
-    result = db.table("voice_messages").insert(
-        {
-            "message_id": message_id,
-            "user_id": user_id,
-            "telegram_file_id": telegram_file_id,
-            "transcription": transcription,
-        }
-    ).execute()
-    return result.data[0]
+    with get_session() as session:
+        voice = VoiceMessage(
+            message_id=message_id,
+            user_id=user_id,
+            telegram_file_id=telegram_file_id,
+            transcription=transcription
+        )
+        session.add(voice)
+        session.commit()
+        session.refresh(voice)
+        return _to_dict(voice)
 
 
 def update_voice_transcription(voice_message_id: str, transcription: str) -> dict:
-    """Called by the transcription agent once it finishes processing the audio."""
-    result = db.table("voice_messages").update(
-        {"transcription": transcription}
-    ).eq("id", voice_message_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        voice = session.query(VoiceMessage).filter_by(id=voice_message_id).first()
+        voice.transcription = transcription
+        session.commit()
+        session.refresh(voice)
+        return _to_dict(voice)
 
 
-def get_voice_message(message_id: str) -> dict | None:
-    result = (
-        db.table("voice_messages")
-        .select("*")
-        .eq("message_id", message_id)
-        .execute()
-    )
-    return result.data[0] if result.data else None
-
-
-# memories
-
-def save_memory(
-    user_id: str,
-    summary: str,
-    message_id: str = None,
-    category: str = None,
-    event_date: str = None,
-    neo4j_node_id: str = None
-) -> dict:
-    """
-    event_date: when the event actually happened, e.g. '2026-05-28'
-                separate from created_at which is when it was logged
-    """
-    result = db.table("memories").insert(
-        {
-            "user_id": user_id,
-            "message_id": message_id,
-            "summary": summary,
-            "category": category,
-            "event_date": event_date,
-            "neo4j_node_id": neo4j_node_id,
-        }
-    ).execute()
-    return result.data[0]
-
-
-def get_memories(user_id: str, category: str = None, limit: int = 20) -> list:
-    query = (
-        db.table("memories")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .limit(limit)
-    )
-    if category:
-        query = query.eq("category", category)
-    return query.execute().data
-
-
-def get_memories_by_date(user_id: str, event_date: str) -> list:
-    """
-    Fetch memories by the date the event actually happened.
-    event_date: ISO date string e.g. '2026-05-28'
-    """
-    result = (
-        db.table("memories")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("event_date", event_date)
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return result.data
-
-
-def search_memories(user_id: str, keyword: str) -> list:
-    """
-    Case-insensitive keyword search across memory summaries.
-    Used when user asks 'what did I say about my doctor'.
-    """
-    result = (
-        db.table("memories")
-        .select("*")
-        .eq("user_id", user_id)
-        .ilike("summary", f"%{keyword}%")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return result.data
-
-
-def update_memory_neo4j_id(memory_id: str, neo4j_node_id: str) -> dict:
-    result = db.table("memories").update(
-        {"neo4j_node_id": neo4j_node_id}
-    ).eq("id", memory_id).execute()
-    return result.data[0]
-
-
-def delete_memory(memory_id: str) -> None:
-    """Called when user says 'forget that' or 'delete that memory'."""
-    db.table("memories").delete().eq("id", memory_id).execute()
-
-
-# tasks
+#  Tasks 
 
 def save_task(
     user_id: str,
@@ -254,68 +194,60 @@ def save_task(
     notion_page_id: str = None,
     neo4j_node_id: str = None
 ) -> dict:
-    """
-    due_date: ISO date string e.g. '2026-05-30'
-    notion_database_id: FK to notion_databases table, nullable
-    """
-    result = db.table("tasks").insert(
-        {
-            "user_id": user_id,
-            "message_id": message_id,
-            "notion_database_id": notion_database_id,
-            "title": title,
-            "due_date": due_date,
-            "notion_page_id": notion_page_id,
-            "neo4j_node_id": neo4j_node_id,
-        }
-    ).execute()
-    return result.data[0]
+    with get_session() as session:
+        task = Task(
+            user_id=user_id,
+            message_id=message_id,
+            notion_database_id=notion_database_id,
+            title=title,
+            due_date=due_date,
+            notion_page_id=notion_page_id,
+            neo4j_node_id=neo4j_node_id
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        return _to_dict(task)
 
 
 def get_tasks(user_id: str, status: str = None) -> list:
-    """status options: pending, done, cancelled"""
-    query = (
-        db.table("tasks")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-    )
-    if status:
-        query = query.eq("status", status)
-    return query.execute().data
-
-
-def update_task(task_id: str, title: str = None, due_date: str = None) -> dict:
-    """Update task title and/or due date."""
-    updates = {}
-    if title is not None:
-        updates["title"] = title
-    if due_date is not None:
-        updates["due_date"] = due_date
-    result = db.table("tasks").update(updates).eq("id", task_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        query = session.query(Task).filter_by(user_id=user_id).order_by(Task.created_at.desc())
+        if status:
+            query = query.filter_by(status=status)
+        return [_to_dict(t) for t in query.all()]
 
 
 def update_task_status(task_id: str, status: str) -> dict:
-    """status options: pending, done, cancelled"""
-    result = db.table("tasks").update(
-        {"status": status}
-    ).eq("id", task_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        task = session.query(Task).filter_by(id=task_id).first()
+        task.status = status
+        session.commit()
+        session.refresh(task)
+        return _to_dict(task)
 
 
-def update_task_notion_id(task_id: str, notion_page_id: str) -> dict:
-    result = db.table("tasks").update(
-        {"notion_page_id": notion_page_id}
-    ).eq("id", task_id).execute()
-    return result.data[0]
+def update_task(task_id: str, title: str = None, due_date: str = None) -> dict:
+    with get_session() as session:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if title:
+            task.title = title
+        if due_date:
+            task.due_date = due_date
+        session.commit()
+        session.refresh(task)
+        return _to_dict(task)
 
 
 def delete_task(task_id: str) -> None:
-    db.table("tasks").delete().eq("id", task_id).execute()
+    with get_session() as session:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if task:
+            session.delete(task)
+            session.commit()
 
 
-# reminders
+#  Reminders 
 
 def save_reminder(
     user_id: str,
@@ -325,175 +257,136 @@ def save_reminder(
     task_id: str = None,
     neo4j_node_id: str = None
 ) -> dict:
-    """
-    remind_at: ISO 8601 with timezone e.g. '2026-05-30T09:00:00+00:00'
-    task_id: nullable, link to a task if reminder is task-related
-    """
-    result = db.table("reminders").insert(
-        {
-            "user_id": user_id,
-            "message_id": message_id,
-            "task_id": task_id,
-            "text": text,
-            "remind_at": remind_at,
-            "neo4j_node_id": neo4j_node_id,
-        }
-    ).execute()
-    return result.data[0]
+    with get_session() as session:
+        reminder = Reminder(
+            user_id=user_id,
+            message_id=message_id,
+            task_id=task_id,
+            text=text,
+            remind_at=remind_at,
+            neo4j_node_id=neo4j_node_id
+        )
+        session.add(reminder)
+        session.commit()
+        session.refresh(reminder)
+        return _to_dict(reminder)
 
 
 def get_due_reminders() -> list:
-    """
-    Returns all unsent reminders whose remind_at is now or in the past.
-    Called by the background job on a schedule.
-    Includes user chat_id so the job knows where to send the Telegram message.
-    """
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
-    result = (
-        db.table("reminders")
-        .select("*, users(chat_id)")
-        .eq("is_sent", False)
-        .lte("remind_at", now)
-        .execute()
-    )
-    return result.data
+    with get_session() as session:
+        now = datetime.now(timezone.utc)
+        reminders = (
+            session.query(Reminder)
+            .filter(Reminder.is_sent == False, Reminder.remind_at <= now)
+            .all()
+        )
+        # include chat_id for telegram sending
+        result = []
+        for r in reminders:
+            d = _to_dict(r)
+            user = session.query(User).filter_by(id=r.user_id).first()
+            d["chat_id"] = user.chat_id if user else None
+            result.append(d)
+        return result
 
 
 def get_reminders_for_user(user_id: str, include_sent: bool = False) -> list:
-    query = (
-        db.table("reminders")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("remind_at")
-    )
-    if not include_sent:
-        query = query.eq("is_sent", False)
-    return query.execute().data
-
-
-def get_next_reminder(user_id: str) -> dict | None:
-    """Returns the next upcoming unsent reminder for a user."""
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
-    result = (
-        db.table("reminders")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("is_sent", False)
-        .gte("remind_at", now)
-        .order("remind_at")
-        .limit(1)
-        .execute()
-    )
-    return result.data[0] if result.data else None
+    with get_session() as session:
+        query = session.query(Reminder).filter_by(user_id=user_id).order_by(Reminder.remind_at)
+        if not include_sent:
+            query = query.filter(Reminder.is_sent == False)
+        return [_to_dict(r) for r in query.all()]
 
 
 def mark_reminder_sent(reminder_id: str) -> dict:
-    result = db.table("reminders").update(
-        {"is_sent": True}
-    ).eq("id", reminder_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        reminder = session.query(Reminder).filter_by(id=reminder_id).first()
+        reminder.is_sent = True
+        session.commit()
+        session.refresh(reminder)
+        return _to_dict(reminder)
 
 
 def update_reminder(reminder_id: str, text: str = None, remind_at: str = None) -> dict:
-    """Update reminder text and/or time."""
-    updates = {}
-    if text is not None:
-        updates["text"] = text
-    if remind_at is not None:
-        updates["remind_at"] = remind_at
-        updates["is_sent"] = False
-    result = db.table("reminders").update(updates).eq("id", reminder_id).execute()
-    return result.data[0]
+    with get_session() as session:
+        reminder = session.query(Reminder).filter_by(id=reminder_id).first()
+        if text:
+            reminder.text = text
+        if remind_at:
+            reminder.remind_at = remind_at
+            reminder.is_sent = False
+        session.commit()
+        session.refresh(reminder)
+        return _to_dict(reminder)
 
 
 def delete_reminder(reminder_id: str) -> None:
-    db.table("reminders").delete().eq("id", reminder_id).execute()
+    with get_session() as session:
+        reminder = session.query(Reminder).filter_by(id=reminder_id).first()
+        if reminder:
+            session.delete(reminder)
+            session.commit()
 
-# captures
-
-def save_capture(
-    user_id: str,
-    raw_text: str,
-    message_id: str = None,
-    source: str = "telegram"
-) -> dict:
-    """Store raw incoming message before processing."""
-    result = db.table("captures").insert(
-        {
-            "user_id": user_id,
-            "message_id": message_id,
-            "raw_text": raw_text,
-            "source": source,
-        }
-    ).execute()
-    return result.data[0]
+def get_voice_message(message_id: str) -> dict | None:
+    with get_session() as session:
+        voice = session.query(VoiceMessage).filter_by(message_id=message_id).first()
+        return _to_dict(voice) if voice else None
 
 
-def mark_capture_processed(capture_id: str) -> dict:
-    result = db.table("captures").update(
-        {"processed": True}
-    ).eq("id", capture_id).execute()
-    return result.data[0]
+def get_next_reminder(user_id: str) -> dict | None:
+    with get_session() as session:
+        now = datetime.now(timezone.utc)
+        reminder = (
+            session.query(Reminder)
+            .filter(
+                Reminder.user_id == user_id,
+                Reminder.is_sent == False,
+                Reminder.remind_at >= now
+            )
+            .order_by(Reminder.remind_at)
+            .first()
+        )
+        return _to_dict(reminder) if reminder else None
 
 
-def get_unprocessed_captures(user_id: str) -> list:
-    result = (
-        db.table("captures")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("processed", False)
-        .order("created_at")
-        .execute()
-    )
-    return result.data
+def update_task_notion_id(task_id: str, notion_page_id: str) -> dict:
+    with get_session() as session:
+        task = session.query(Task).filter_by(id=task_id).first()
+        task.notion_page_id = notion_page_id
+        session.commit()
+        session.refresh(task)
+        return _to_dict(task)
+
+def update_message_intent(message_id: str, intent: str, llm_raw_response: dict = None) -> dict:
+    with get_session() as session:
+        msg = session.query(Message).filter_by(id=message_id).first()
+        if msg:
+            msg.intent = intent
+            if llm_raw_response:
+                msg.llm_raw_response = llm_raw_response
+            session.commit()
+            session.refresh(msg)
+            return _to_dict(msg)
+        
+#  Helpers 
+
+def _user_to_dict(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "chat_id": user.chat_id,
+        "first_name": user.first_name,
+        "username": user.username,
+        "notion_connected": user.notion_connected,
+        "notion_access_token": user.notion_access_token,
+        "created_at": str(user.created_at),
+        "updated_at": str(user.updated_at),
+    }
 
 
-# RAG / embeddings
-
-def save_memory_with_embedding(
-    user_id: str,
-    summary: str,
-    embedding: list,
-    message_id: str = None,
-    category: str = None,
-    event_date: str = None,
-    neo4j_node_id: str = None
-) -> dict:
-    """Save memory with vector embedding for semantic search."""
-    result = db.table("memories").insert(
-        {
-            "user_id": user_id,
-            "message_id": message_id,
-            "summary": summary,
-            "category": category,
-            "event_date": event_date,
-            "neo4j_node_id": neo4j_node_id,
-            "embedding": embedding,
-        }
-    ).execute()
-    return result.data[0]
-
-
-def search_memories_by_embedding(
-    user_id: str,
-    query_embedding: list,
-    limit: int = 5,
-    threshold: float = 0.7
-) -> list:
-    """
-    Semantic search across memories using cosine similarity.
-    query_embedding: vector from the same embedding model used to save.
-    threshold: minimum similarity score (0-1), higher = more similar.
-    """
-    result = db.rpc(
-        "match_memories",
-        {
-            "query_embedding": query_embedding,
-            "match_user_id": user_id,
-            "match_threshold": threshold,
-            "match_count": limit,
-        }
-    ).execute()
-    return result.data
+def _to_dict(obj) -> dict:
+    """Generic converter for SQLAlchemy models to dict."""
+    result = {}
+    for col in obj.__table__.columns:
+        val = getattr(obj, col.name)
+        result[col.name] = str(val) if val is not None else None
+    return result

@@ -17,6 +17,13 @@ from assistant_backend_1.features_services.notion import (
     save_reminder_to_notion
 )
 
+from assistant_backend_1.models.db_hooks import (
+    hook_save_task,
+    hook_save_reminder,
+    hook_mark_task_done,
+    hook_cancel_task,
+)
+
 client = Groq(api_key=GROQ_API_KEY)
 
 conversation_histories: dict[str, list] = {}
@@ -65,19 +72,20 @@ def handle_brain_dump(chat_id: str, items: list):
                 item["task"].get("title"),
                 item["task"].get("due")
             )
+            hook_save_task(chat_id, item["task"].get("title"), due_date=item["task"].get("due"))
         elif intent == "set_reminder" and item.get("reminder"):
             save_reminder(
                 chat_id,
                 item["reminder"].get("text"),
                 item["reminder"].get("datetime")
             )
+            hook_save_reminder(chat_id, item["reminder"].get("text"), remind_at=item["reminder"].get("datetime"))
         elif intent == "save_memory" and item.get("memory_summary"):
             save_memory(
                 chat_id,
                 item["memory_summary"],
                 item.get("entities", [])
             )
-
 
 def route_intent(chat_id: str, llm_response: LLMResponse):
     """Route LLM response to correct save function based on intent."""
@@ -112,6 +120,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
             )
+            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
+
             # Her Notion integration — untouched
             save_reminder_to_notion(
                 chat_id,
@@ -127,12 +137,15 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
             )
+            hook_save_task(chat_id, llm_response.task.get("title"), due_date=llm_response.task.get("due"))
+
             # Her Notion integration — untouched
             save_task_to_notion(
                 chat_id,
                 llm_response.task.get("title"),
                 llm_response.task.get("due")
             )
+
 
     elif intent == "habit_track":
         if llm_response.habit:
@@ -145,6 +158,9 @@ def route_intent(chat_id: str, llm_response: LLMResponse):
     elif intent == "mark_done":
         if llm_response.task:
             mark_task_done(chat_id, llm_response.task.get("title"))
+            hook_mark_task_done(chat_id, llm_response.task.get("title"))
+
+            
 
     elif intent == "update_memory":
         if llm_response.entities:
