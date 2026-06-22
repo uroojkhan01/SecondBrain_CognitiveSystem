@@ -30,3 +30,9 @@ pytz
 schedule
 groq
 neo4j
+sqlalchemy==2.0.32
+psycopg[binary]==3.2.1
+alembic
+greenlet
+python-dotenv
+asyncpg

@@ -54,9 +54,16 @@ async def telegram_webhook(request: Request):
 
 
 
+  # mirror into Supabase
+    hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
+    hook_save_capture(chat_id, user_input)
+
     # mirror into Supabase
     hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
     hook_save_capture(chat_id, user_input)
+    if "voice" in message:
+        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice["file_id"], transcription=transcript)
+
 
     # mirror into postgres
     hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
