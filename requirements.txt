@@ -31,7 +31,7 @@ schedule
 groq
 neo4j
 sqlalchemy==2.0.32
-psycopg[binary]==3.2.1
+psycopg[binary]
 alembic
 greenlet
 python-dotenv
