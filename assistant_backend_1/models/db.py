@@ -367,6 +367,12 @@ def update_message_intent(message_id: str, intent: str, llm_raw_response: dict =
             session.commit()
             session.refresh(msg)
             return _to_dict(msg)
+
+def get_all_users() -> list:
+    """Get all users — used by reminders background job to find chat_ids."""
+    with get_session() as session:
+        users = session.query(User).all()
+        return [_user_to_dict(u) for u in users]
         
 #  Helpers 
 
