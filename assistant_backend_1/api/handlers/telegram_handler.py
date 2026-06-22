@@ -52,24 +52,13 @@ async def telegram_webhook(request: Request):
 
     chat_id = str(message["chat"]["id"])
 
-
-
-  # mirror into Supabase
-    hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
-    hook_save_capture(chat_id, user_input)
-
-    # mirror into Supabase
+    # mirror into Postgres
     hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
     hook_save_capture(chat_id, user_input)
     if "voice" in message:
-        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice["file_id"], transcription=transcript)
+        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice_file_id, transcription=transcript)
 
 
-    # mirror into postgres
-    hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
-    hook_save_capture(chat_id, user_input)
-    if "voice" in message:
-        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice["file_id"], transcription=transcript)
 
     ### process user input through llm model ###
     reply = process_user_input(chat_id, user_input)
