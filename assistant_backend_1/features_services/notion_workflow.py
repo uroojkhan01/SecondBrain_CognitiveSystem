@@ -3,6 +3,8 @@ import logging
 import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from assistant_backend_1.config import GROQ_API_KEYS
+from groq import AsyncGroq
 
 from assistant_backend_1.schema import (
     CAPTURE_SCHEMA,
@@ -92,8 +94,6 @@ class NotionWorkflowManager:
         Tries all available Groq API keys in sequence.
         Returns result string on success, None if all keys fail.
         """
-        from assistant_backend_1.config import GROQ_API_KEYS
-        from groq import AsyncGroq
 
         if not GROQ_API_KEYS:
             logger.warning("[NotionWorkflow] No Groq API keys configured.")

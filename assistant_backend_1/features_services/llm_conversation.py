@@ -4,6 +4,7 @@ import anthropic
 from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY
 from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT, NEO4J_CONTEXT_PROMPT
 from assistant_backend_1.models.llmresponse import LLMResponse
+from assistant_backend_1.features_services.reminders import get_all_reminders, delete_reminder,update_reminder
 from assistant_backend_1.features_services.memory_journal import (
     get_user_context,
     save_memory,
@@ -137,7 +138,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 intent,
                 {"memory_summary": llm_response.memory_summary, "entities": llm_response.entities}
             )
-
+    
     elif intent == "vent":
         # Empathy reply but still save if there's personal content
         if llm_response.memory_summary:
@@ -167,6 +168,53 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 intent,
                 llm_response.reminder
             )
+    elif intent == "delete_reminder":
+        if llm_response.reminder:
+            
+            # Get reminder text the LLM identified
+            reminder_text = llm_response.reminder.get("text", "")
+            
+            # Fetch all reminders and find matching one
+            all_reminders = get_all_reminders(chat_id)
+            matched = next(
+                (r for r in all_reminders 
+                 if reminder_text.lower() in r["name"].lower() 
+                 or r["name"].lower() in reminder_text.lower()),
+                None
+            )
+            
+            if matched:
+                success = delete_reminder(chat_id, matched["id"])
+                print(f"{'✅' if success else '❌'} Delete reminder: {reminder_text}")
+            else:
+                print(f"⚠️ No matching reminder found for: {reminder_text}")
+
+    elif intent == "update_reminder":
+        if llm_response.reminder:
+            
+            reminder_text = llm_response.reminder.get("text", "")
+            new_datetime = llm_response.reminder.get("datetime")
+            new_text = llm_response.reminder.get("new_text")  # LLM provides updated text
+            
+            # Fetch all reminders and find matching one
+            all_reminders = get_all_reminders(chat_id)
+            matched = next(
+                (r for r in all_reminders 
+                 if reminder_text.lower() in r["name"].lower() 
+                 or r["name"].lower() in reminder_text.lower()),
+                None
+            )
+            
+            if matched:
+                success = update_reminder(
+                    chat_id,
+                    matched["id"],
+                    text=new_text,
+                    remind_at=new_datetime
+                )
+                print(f"{'✅' if success else '❌'} Update reminder: {reminder_text}")
+            else:
+                print(f"⚠️ No matching reminder found for: {reminder_text}")
 
     elif intent == "create_task":
         if llm_response.task:

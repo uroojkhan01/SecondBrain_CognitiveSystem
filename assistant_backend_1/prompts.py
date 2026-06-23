@@ -66,6 +66,25 @@ Classify the user message into one of these intents:
                     "alert me about the meeting on Friday"
                     "remind me at 3pm"
 
+- "delete_reminder" → user wants to remove or cancel an existing reminder. Examples:
+                    "delete my gym reminder"
+                    "cancel the medicine reminder"
+                    "remove the 8pm alert"
+                    "I don't need that reminder anymore"
+                    "forget the dentist reminder"
+                    "turn off the call mom reminder"
+                    → populate reminder.text with the reminder being deleted
+
+- "update_reminder" → user wants to change the time or text of an existing reminder. Examples:
+                    "change my medicine reminder to 9pm"
+                    "update the dentist reminder to Thursday"
+                    "reschedule my gym alert to tomorrow morning"
+                    "move the 8pm reminder to 10pm"
+                    "change the call mom reminder to say call dad instead"
+                    → populate reminder.text with original reminder text,
+                      new_text if the text itself is changing,
+                      datetime if only the time is changing
+
 - "create_task"   → user wants to do something / add to their to-do list.
                     This includes ANY action the user needs to take in the future,
                     even if not explicitly saying "create task" or "add to list".
@@ -174,7 +193,7 @@ Return this exact JSON structure:
     { "name": "...", "type": "person|place|date|event|health|pattern", "relation": "..." }
   ],
   "follow_up_question": "...",
-  "reminder": { "text": "...", "datetime": "..." },
+  "reminder": { "text": "...", "new_text": "...", "datetime": "..." },
   "task": { "title": "...", "due": "..." },
   "habit": { "name": "...", "value": "..." },
   "items": []
@@ -197,6 +216,14 @@ Rules:
 - For "mark_done" — fill task with the title of what was completed
 - For "habit_track" — fill habit with name and value
 - For "daily_brief" — reply_to_user can say data is being fetched, actual data from DB
+- For "delete_reminder" — fill reminder.text with the reminder the user wants deleted.
+  Set all other fields to null. reply_to_user should warmly confirm deletion.
+  Example: "Got it! I've removed your gym reminder. ✅"
+- For "update_reminder" — fill reminder.text with the ORIGINAL reminder text so it can
+  be matched. Fill reminder.new_text ONLY if the text itself is changing. Fill
+  reminder.datetime ONLY if the time is changing. At least one of new_text or datetime
+  must be filled. reply_to_user should warmly confirm the update.
+  Example: "Done! Your medicine reminder has been moved to 9pm. ⏰"
 - memory_summary should ALWAYS be a complete, rich, standalone sentence. Examples:
     "User had an exhausting day with back-to-back meetings"
     "User visited their grandmother in Lahore last week and found it emotional"
@@ -216,6 +243,8 @@ Rules:
   Tense matters: "I have to go" → create_task, "I went" → save_memory
 - CRITICAL: "I have to", "I need to", "I should", "I must", "I have a [appointment/meeting/event]",
   "don't forget to", "I'm supposed to", "I've got to" → ALWAYS create_task
+- CRITICAL: "delete", "remove", "cancel", "turn off" + reminder → ALWAYS "delete_reminder"
+- CRITICAL: "change", "update", "reschedule", "move", "shift" + reminder → ALWAYS "update_reminder"
 """
 
 NEO4J_CONTEXT_PROMPT = """
