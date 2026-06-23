@@ -18,6 +18,8 @@ GROQ_API_KEYS = [
 # Fallback to the single GROQ_API_KEY if the numbered ones are not provided
 if not GROQ_API_KEYS and os.getenv('GROQ_API_KEY'):
     GROQ_API_KEYS = [os.getenv('GROQ_API_KEY')]
+    
+ANTHROPIC_API_KEY= os.getenv('ANTHROPIC_API_KEY')
 
 # Neo4j
 NEO4J_URI = os.getenv('NEO4J_URI')

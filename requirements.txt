@@ -31,3 +31,4 @@ schedule
 groq
 neo4j
 notion-client
+anthropic

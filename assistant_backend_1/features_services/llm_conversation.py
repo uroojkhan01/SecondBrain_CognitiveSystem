@@ -1,6 +1,7 @@
 import json
 from groq import Groq
-from assistant_backend_1.config import GROQ_API_KEYS
+import anthropic
+from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY
 from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT, NEO4J_CONTEXT_PROMPT
 from assistant_backend_1.models.llmresponse import LLMResponse
 from assistant_backend_1.features_services.memory_journal import (
@@ -210,22 +211,25 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
 
 def process_user_input(chat_id: str, user_input: str) -> str:
     """
-    Takes user message, runs through Groq LLM, we can use claude as well if the quota is finished
-    classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
+    Takes user message, runs through Groq LLM first.
+    If all Groq API keys fail, switches to Claude as fallback.
+    Classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
     """
-
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = []
-
+    
     history = conversation_histories[chat_id]
     history.append({"role": "user", "content": user_input})
-
+    
     try:
         system_prompt = build_system_prompt(chat_id)
-
         response = None
         last_exception = None
-        
+        used_claude = False
+
+        # ─────────────────────────────────────────
+        # STEP 1: Try all Groq API keys first
+        # ─────────────────────────────────────────
         for api_key in GROQ_API_KEYS:
             try:
                 temp_client = Groq(api_key=api_key)
@@ -239,20 +243,56 @@ def process_user_input(chat_id: str, user_input: str) -> str:
                         *history
                     ]
                 )
+                print(f"[LLM] Using Groq with key: {str(api_key)[:5]}...")
                 break
             except Exception as e:
-                print(f"[LLM] Request failed with key starting with {str(api_key)[:5] if api_key else 'None'}... : {e}")
+                print(f"[LLM] Groq key {str(api_key)[:5]}... failed: {e}")
                 last_exception = e
-                
+                continue
+
+        # ─────────────────────────────────────────
+        # STEP 2: All Groq keys failed → fallback to Claude
+        # ─────────────────────────────────────────
         if response is None:
-            if last_exception:
-                raise last_exception
-            else:
-                raise Exception("No valid API keys available.")
+            print(f"[LLM] All Groq keys exhausted. Switching to Claude fallback...")
+            try:
+                import anthropic
+                
+                claude_api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not claude_api_key:
+                    raise Exception("ANTHROPIC_API_KEY not set in environment.")
+                
+                claude_client = anthropic.Anthropic(api_key=claude_api_key)
+                
+                # Claude requires system prompt separately, not in messages array
+                claude_response = claude_client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=1024,
+                    temperature=0.2,
+                    system=system_prompt,
+                    messages=history  # same history format works for Claude
+                )
+                
+                # Normalize Claude response to match Groq response structure
+                raw = claude_response.content[0].text
+                used_claude = True
+                print(f"[LLM] Claude fallback succeeded.")
 
-        raw = response.choices[0].message.content
+            except Exception as claude_error:
+                print(f"[LLM] Claude fallback also failed: {claude_error}")
+                # Both Groq and Claude failed — raise original Groq error
+                if last_exception:
+                    raise last_exception
+                raise Exception("All LLM providers failed.")
+        else:
+            # Groq succeeded — extract raw text normally
+            raw = response.choices[0].message.content
+
+        # ─────────────────────────────────────────
+        # STEP 3: Parse response (same for both providers)
+        # ─────────────────────────────────────────
         data = json.loads(raw)
-
+        
         llm_response = LLMResponse(
             intent=data.get("intent", "conversation"),
             reply_to_user=data.get("reply_to_user", "I'm here, tell me more."),
@@ -266,23 +306,21 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         )
 
         history.append({"role": "assistant", "content": raw})
-
+        
         if len(history) > 20:
             conversation_histories[chat_id] = history[-20:]
 
-        print(
-            f"[LLM] Intent: {llm_response.intent} | Reply: {llm_response.reply_to_user}")
+        provider = "Claude" if used_claude else "Groq"
+        print(f"[LLM] Provider: {provider} | Intent: {llm_response.intent} | Reply: {llm_response.reply_to_user}")
         print(f"[LLM] Entities: {llm_response.entities}")
         print(f"[LLM] Memory: {llm_response.memory_summary}")
 
         route_intent(chat_id, llm_response, user_input)
-
         return llm_response.reply_to_user
 
     except json.JSONDecodeError as e:
         print(f"[LLM] JSON parse error: {e}")
         return "Sorry, I had trouble understanding that. Could you say it again?"
-
     except Exception as e:
         print(f"[LLM] Error: {e}")
         return "Something went wrong on my end. Please try again!"
