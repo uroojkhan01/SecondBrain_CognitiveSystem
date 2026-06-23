@@ -256,13 +256,10 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         if response is None:
             print(f"[LLM] All Groq keys exhausted. Switching to Claude fallback...")
             try:
-                import anthropic
-                
-                claude_api_key = os.getenv("ANTHROPIC_API_KEY")
-                if not claude_api_key:
+                if not ANTHROPIC_API_KEY:
                     raise Exception("ANTHROPIC_API_KEY not set in environment.")
                 
-                claude_client = anthropic.Anthropic(api_key=claude_api_key)
+                claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                 
                 # Claude requires system prompt separately, not in messages array
                 claude_response = claude_client.messages.create(
