@@ -4,20 +4,29 @@ import requests
 import pytz
 import re
 from datetime import datetime, timedelta
-from assistant_backend_1.helpers import load_users
+from assistant_backend_1.models.db import get_user_by_chat_id, get_notion_databases
+
+def get_user_notion_credentials(chat_id: str):
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        return None, None
+    token = user.get("notion_access_token")
+    dbs = get_notion_databases(user["id"])
+    database_id = dbs[0]["notion_db_id"] if dbs else None
+    return token, database_id
 
 
 def get_active_database_schema(chat_id: str) -> dict:
-    """Get schema of user's active database"""
-    users = load_users()
-    user = users.get(str(chat_id), {})
-    notion = user.get("notion", {})
-    active_id = notion.get("active_database_id")
-    database_ids = notion.get("database_ids", [])
+    # """Get schema of user's active database"""
+    # users = load_users()
+    # user = users.get(str(chat_id), {})
+    # notion = user.get("notion", {})
+    # active_id = notion.get("active_database_id")
+    # database_ids = notion.get("database_ids", [])
     
-    for db in database_ids:
-        if db["id"] == active_id:
-            return db.get("schema", {})
+    # for db in database_ids:
+    #     if db["id"] == active_id:
+    #         return db.get("schema", {})
     
     return {}
 
@@ -29,14 +38,14 @@ def get_column_name(schema: dict, col_type: str) -> str:
             return col_name
     return None
 
-def get_user_notion_credentials(chat_id: str):
-    """Get token and active database id for a user"""
-    users = load_users()
-    user = users.get(str(chat_id), {})
-    notion = user.get("notion", {})
-    token = notion.get("token")
-    database_id = notion.get("active_database_id")
-    return token, database_id
+# def get_user_notion_credentials(chat_id: str):
+#     """Get token and active database id for a user"""
+#     users = load_users()
+#     user = users.get(str(chat_id), {})
+#     notion = user.get("notion", {})
+#     token = notion.get("token")
+#     database_id = notion.get("active_database_id")
+#     return token, database_id
 
 
 def get_notion_workspace_timezone(token: str, database_id: str) -> str:

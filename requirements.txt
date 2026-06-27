@@ -32,3 +32,9 @@ groq
 neo4j
 notion-client
 anthropic
+sqlalchemy==2.0.32
+psycopg[binary]
+alembic
+greenlet
+python-dotenv
+asyncpg

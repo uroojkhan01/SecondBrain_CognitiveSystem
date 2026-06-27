@@ -1,6 +1,11 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
 from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected, save_users
+# from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected
+
+# NEW
+from assistant_backend_1.models.db_helpers import save_user, get_oauth_url, load_users, is_notion_connected
+from assistant_backend_1.models.db_hooks import hook_upsert_user, hook_save_message, hook_save_capture, hook_save_voice_message
 
 from assistant_backend_1.features_services.telegram import (
     send_message,
@@ -50,7 +55,18 @@ async def telegram_webhook(request: Request):
 
     chat_id = str(message["chat"]["id"])
 
-    # Ensure user exists in user.json
+    # mirror into Postgres
+    hook_upsert_user(chat_id, first_name=message["chat"].get("first_name"), username=message["chat"].get("username"))
+    hook_save_capture(chat_id, user_input)
+    if "voice" in message:
+        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice_file_id, transcription=transcript)
+
+
+
+    ### process user input through llm model ###
+    reply = process_user_input(chat_id, user_input)
+    hook_save_message(chat_id, user_input, intent=None, input_type="voice" if "voice" in message else "text")
+
     first_name = message["chat"].get("first_name")
     username = message["chat"].get("username")
     save_user(chat_id, first_name, username)

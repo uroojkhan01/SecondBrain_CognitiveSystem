@@ -19,6 +19,18 @@ from assistant_backend_1.features_services.memory_journal import (
     update_local_task
 )
 from assistant_backend_1.features_services.notion import save_task_to_notion, delete_task_from_notion, update_task_in_notion
+from assistant_backend_1.features_services.notion import (
+    save_task_to_notion,
+    save_reminder_to_notion
+)
+
+from assistant_backend_1.models.db_hooks import (
+    hook_save_task,
+    hook_save_reminder,
+    hook_mark_task_done,
+    hook_cancel_task,
+)
+
 
 conversation_histories: dict[str, list] = {}
 
@@ -66,12 +78,14 @@ def handle_brain_dump(chat_id: str, items: list):
             criticality = item["task"].get("criticality")
             save_task(chat_id, title, due)
             save_task_to_notion(chat_id, title, due, criticality)
+            hook_save_task(chat_id, item["task"].get("title"), due_date=item["task"].get("due"))
         elif intent == "set_reminder" and item.get("reminder"):
             save_reminder(
                 chat_id,
                 item["reminder"].get("text"),
                 item["reminder"].get("datetime")
             )
+            hook_save_reminder(chat_id, item["reminder"].get("text"), remind_at=item["reminder"].get("datetime"))
         elif intent == "save_memory" and item.get("memory_summary"):
             save_memory(
                 chat_id,
@@ -146,6 +160,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                  if reminder_text.lower() in r["name"].lower() 
                  or r["name"].lower() in reminder_text.lower()),
                 None
+            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
+
             )
             
             if matched:
@@ -195,6 +211,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                  if task_title.lower() in t["title"].lower()
                  or t["title"].lower() in task_title.lower()),
                 None
+            hook_save_task(chat_id, llm_response.task.get("title"), due_date=llm_response.task.get("due"))
             )
             if matched:
                 success = update_local_task(chat_id, matched["id"], title=new_title, due=new_due)
@@ -202,6 +219,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             else:
                 print(f"⚠️ No matching task found in Neo4j: {task_title}")
             update_task_in_notion(chat_id, task_title, new_title=new_title, new_due=new_due)
+
 
     elif intent == "habit_track":
         if llm_response.habit:
@@ -216,6 +234,10 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             title = llm_response.task.get("title")
             mark_task_done(chat_id, title)
             mark_reminder_done(chat_id, title)
+
+            hook_mark_task_done(chat_id, llm_response.task.get("title"))
+
+            
 
     elif intent == "update_memory":
         if llm_response.entities:
