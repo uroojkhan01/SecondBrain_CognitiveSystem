@@ -251,6 +251,7 @@ def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> b
             "properties": {
                 "Parent Project": {
                     "relation": {
+                        "database_id": master_db_id,
                         "type": "dual_property",
                         "dual_property": {}
                     }
@@ -260,17 +261,37 @@ def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> b
         timeout=30,
     )
     # Grab the auto-generated synced property name from the response
-    synced_name = "Parent Project"  # Notion default fallback
+    synced_name = None
     if r.status_code == 200:
         prop = r.json().get("properties", {}).get("Parent Project", {})
         synced_name = (
             prop.get("relation", {})
                 .get("dual_property", {})
-                .get("synced_property_name", synced_name)
+                .get("synced_property_name")
         )
         print(f"✅ Dual relation set — Master Projects back-link: '{synced_name}'")
     else:
-        print(f"⚠️ Dual relation patch failed (may already be dual): {r.json()}")
+        print(f"⚠️ Dual relation patch failed: {r.json()}")
+
+    # If we still don't have the synced name, read it directly from Master Projects DB
+    if not synced_name:
+        r2 = requests.get(
+            f"{NOTION_API}/databases/{master_db_id}",
+            headers=_headers(token),
+            timeout=30,
+        )
+        if r2.status_code == 200:
+            props = r2.json().get("properties", {})
+            for name, prop in props.items():
+                if prop.get("type") == "relation":
+                    rel_db = prop.get("relation", {}).get("database_id", "")
+                    if rel_db.replace("-", "") == tasks_db_id.replace("-", ""):
+                        synced_name = name
+                        print(f"✅ Found back-link on Master Projects DB: '{synced_name}'")
+                        break
+        if not synced_name:
+            print("❌ Could not determine back-link property name — skipping rollup setup")
+            return False
 
     # ── 3. Rollup properties on Master Projects DB ────────────────────
     r = requests.patch(
