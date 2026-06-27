@@ -60,16 +60,17 @@ async def telegram_webhook(request: Request):
         current_users = load_users()
         user_data = current_users.get(str(chat_id), {})
         notion_data = user_data.get("notion", {})
-        database_list = notion_data.get("database_ids", [])
-        if database_list:
+        # Only databases are selectable (matches what's shown in the message)
+        selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
+        if selectable:
             index = int(user_input.strip()) - 1
-            if 0 <= index < len(database_list):
-                selected_db = database_list[index]
+            if 0 <= index < len(selectable):
+                selected_db = selectable[index]
                 notion_data["active_database_id"] = selected_db["id"]
                 save_users(current_users)
                 await send_message(
                     chat_id,
-                    f"✅ Active Notion connection set to: *{selected_db['name']}* ({selected_db['type'].capitalize()})"
+                    f"✅ Active database set to: *{selected_db['name']}*"
                 )
                 return {"status": "ok"}
 

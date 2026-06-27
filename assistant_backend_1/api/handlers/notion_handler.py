@@ -89,16 +89,20 @@ async def notion_oauth_callback(request: Request):
     databases = db_response.json().get("results", [])
     print(f"Found {len(databases)} pages/databases")
 
-    # Build database/page list
+    # Build database/page list — skip rows inside databases (e.g. task entries)
     database_list = []
     for db in databases:
+        parent_type = db.get("parent", {}).get("type", "")
+        if parent_type == "database_id":
+            continue  # this is a row inside a database, not a page or db
+
         obj_type = db.get("object", "database")
         db_name = get_title_from_search_result(db)
-        
+
         schema = {}
         if obj_type == "database":
             schema = fetch_database_schema(access_token, db["id"])
-    
+
         database_list.append({
             "id": db["id"],
             "name": db_name,
@@ -135,14 +139,15 @@ async def notion_oauth_callback(request: Request):
             </html>
         """)
 
-    # Reload users to get the full merged database list (OAuth + Second Brain)
+    # Reload users — only show databases (not pages) as selectable options
     users = load_users()
     full_db_list = users[str(chat_id)]["notion"]["database_ids"]
     active_id = users[str(chat_id)]["notion"]["active_database_id"]
     active_name = next((db["name"] for db in full_db_list if db["id"] == active_id), "Tasks and To Dos")
 
+    selectable = [db for db in full_db_list if db["type"] == "database"]
     db_options = "\n".join([
-        f"{i+1}. {db['name']} ({db['type'].capitalize()})" for i, db in enumerate(full_db_list)
+        f"{i+1}. {db['name']}" for i, db in enumerate(selectable)
     ])
 
     if status == "exists":
