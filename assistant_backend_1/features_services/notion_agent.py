@@ -605,9 +605,17 @@ def _call_task_agent(tasks: list) -> dict | None:
             return None
 
     try:
-        return json.loads(raw)
+        # Strip markdown code fences Claude sometimes adds despite instructions
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        return json.loads(cleaned)
     except Exception as e:
         print(f"[TaskAgent] JSON parse error: {e}")
+        print(f"[TaskAgent] Raw response was: {repr(raw)}")
         return None
 
 
