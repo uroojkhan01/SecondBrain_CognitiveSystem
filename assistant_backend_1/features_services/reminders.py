@@ -111,35 +111,6 @@ def check_and_remind():
 
 
 # ============================================
-# TASK MOVING AGENT JOB
-# ============================================
-
-def run_task_moving_for_all_users():
-    """
-    Runs the AI task-moving agent for every user who has a Second Brain set up.
-    Only executes when ENABLE_LLM_API is True — skips silently otherwise.
-    """
-    from assistant_backend_1.config import ENABLE_LLM_API
-    if not ENABLE_LLM_API:
-        print("⏭️ Task moving skipped — ENABLE_LLM_API is False.")
-        return
-
-    from assistant_backend_1.features_services.notion_agent import run_notion_task_moving
-
-    users = load_users()
-    for chat_id, user_data in users.items():
-        token = user_data.get("notion", {}).get("token")
-        second_brain = user_data.get("second_brain", {})
-        if not token or not second_brain.get("databases", {}).get("tasks_todos"):
-            continue
-        print(f"🤖 Running task moving agent for user {chat_id}...")
-        try:
-            run_notion_task_moving(chat_id, token)
-        except Exception as e:
-            print(f"❌ Task moving failed for user {chat_id}: {e}")
-
-
-# ============================================
 # CRUD OPERATIONS FOR REMINDERS
 # ============================================
 

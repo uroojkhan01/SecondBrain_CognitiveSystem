@@ -588,7 +588,7 @@ def _call_task_agent(tasks: list) -> dict | None:
         return None
 
 
-def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str, tasks_db_id: str) -> str | None:
+def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str) -> str | None:
     """Create an entry in an area database linked back to the original task."""
     response = requests.post(
         f"{NOTION_API}/pages",
