@@ -322,7 +322,12 @@ def setup_second_brain(chat_id: str, token: str) -> str:
 
         # Merge with existing OAuth database list (avoid duplicates)
         users.setdefault(str(chat_id), {})
-        existing_list = users[str(chat_id)].get("notion", {}).get("database_ids", [])
+        users[str(chat_id)].setdefault("notion", {
+            "token": token,
+            "active_database_id": None,
+            "database_ids": []
+        })
+        existing_list = users[str(chat_id)]["notion"].get("database_ids", [])
         existing_ids = {db["id"] for db in existing_list}
         merged = existing_list + [db for db in sb_database_list if db["id"] not in existing_ids]
 
