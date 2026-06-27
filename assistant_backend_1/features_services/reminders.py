@@ -231,14 +231,14 @@ def run_task_moving_for_all_users():
 def start_reminder_scheduler():
     """Call this from app.py / lifespan to start scheduler in background."""
     print(f"🚀 Reminder scheduler starting...")
-    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min")
+    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Overdue check: twice daily | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min")
 
     check_and_remind()
     mark_overdue_tasks_done()
     run_task_moving_for_all_users()
 
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_and_remind)
-    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(mark_overdue_tasks_done)
+    schedule.every(12).hours.do(mark_overdue_tasks_done)
     schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
 
     while True:
