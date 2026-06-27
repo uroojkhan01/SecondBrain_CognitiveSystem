@@ -85,6 +85,7 @@ def _create_root_page(token: str, title: str, emoji: str) -> str:
                 }
             },
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -106,6 +107,7 @@ def _create_child_page(token: str, parent_page_id: str, title: str, emoji: str) 
                 }
             },
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -124,6 +126,7 @@ def _create_database(token: str, parent_page_id: str, title: str, emoji: str, pr
             "title": [{"type": "text", "text": {"content": title}}],
             "properties": properties,
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -152,6 +155,7 @@ def _patch_task_link(token: str, area_db_id: str, tasks_db_id: str) -> bool:
                 }
             }
         },
+        timeout=30,
     )
     if response.status_code != 200:
         print(f"❌ Failed to patch area DB {area_db_id}: {response.json()}")
@@ -187,6 +191,7 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
 
     # Update flat schemas in notion.database_ids
     if success:
+        users[str(chat_id)].setdefault("notion", {"token": None, "active_database_id": None, "database_ids": []})
         database_ids = users[str(chat_id)]["notion"].get("database_ids", [])
         area_db_ids = set(dbs.get(k) for k in area_keys)
         for db in database_ids:
@@ -204,6 +209,7 @@ def _page_exists(token: str, page_id: str) -> bool:
     response = requests.get(
         f"{NOTION_API}/pages/{page_id}",
         headers=_headers(token),
+        timeout=30,
     )
     data = response.json()
     return response.status_code == 200 and not data.get("archived", False)
@@ -227,6 +233,7 @@ def _notion_search(token: str, query: str, filter_type: str) -> list:
         f"{NOTION_API}/search",
         headers=_headers(token),
         json={"query": query, "filter": {"property": "object", "value": filter_type}},
+        timeout=30,
     )
     return response.json().get("results", [])
 
@@ -445,6 +452,11 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     # ── 6. Update user.json ──────────────────────────────────────────
     users = load_users()
     users.setdefault(str(chat_id), {})
+    users[str(chat_id)].setdefault("notion", {
+        "token": token,
+        "active_database_id": None,
+        "database_ids": []
+    })
 
     existing = users[str(chat_id)]["notion"].get("database_ids", [])
     users[str(chat_id)]["notion"]["database_ids"] = existing + database_list
@@ -518,6 +530,7 @@ def _fetch_tasks(token: str, tasks_db_id: str) -> list:
             f"{NOTION_API}/databases/{tasks_db_id}/query",
             headers=_headers(token),
             json=payload,
+            timeout=30,
         )
         data = response.json()
         for r in data.get("results", []):
@@ -612,6 +625,7 @@ def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str)
                 },
             },
         },
+        timeout=30,
     )
     if response.status_code == 200:
         return response.json()["id"]
@@ -635,6 +649,7 @@ def _create_project_entry(token: str, master_db_id: str, project: dict) -> str |
                 },
             },
         },
+        timeout=30,
     )
     if response.status_code == 200:
         return response.json()["id"]
@@ -654,6 +669,7 @@ def _link_task_to_project(token: str, task_id: str, project_page_id: str):
                 }
             }
         },
+        timeout=30,
     )
     if response.status_code != 200:
         print(f"❌ Failed to link task {task_id} to project: {response.text}")
