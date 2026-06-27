@@ -592,7 +592,7 @@ def _call_task_agent(tasks: list) -> dict | None:
                 raise Exception("ANTHROPIC_API_KEY not set.")
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             resp = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=2048,
                 temperature=0,
                 system=_TASK_AGENT_PROMPT,
@@ -747,7 +747,7 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         if not task:
             continue
 
-        entry_id = _create_area_entry(token, area_db_id, task, ai_summary, tasks_db_id)
+        entry_id = _create_area_entry(token, area_db_id, task, ai_summary)
         if entry_id:
             print(f"✅ Area entry created: '{task['title']}' → {area}")
 

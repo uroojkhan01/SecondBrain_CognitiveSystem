@@ -303,7 +303,7 @@ def process_user_input(chat_id: str, user_input: str) -> str:
                 
                 # Claude requires system prompt separately, not in messages array
                 claude_response = claude_client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model="claude-haiku-4-5-20251001",
                     max_tokens=1024,
                     temperature=0.2,
                     system=system_prompt,
