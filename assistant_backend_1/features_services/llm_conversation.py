@@ -126,6 +126,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
             )
+            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
     elif intent == "delete_reminder":
         if llm_response.reminder:
             
@@ -182,6 +183,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             criticality = llm_response.task.get("criticality")
             save_task(chat_id, title, due)
             save_task_to_notion(chat_id, title, due, criticality)
+            hook_save_task(chat_id, title, due_date=due)
 
     elif intent == "delete_task":
         if llm_response.task:
