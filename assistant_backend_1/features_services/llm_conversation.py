@@ -123,9 +123,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
         if llm_response.reminder:
             text = llm_response.reminder.get("text")
             remind_at = llm_response.reminder.get("datetime")
-            save_reminder(chat_id, text, remind_at)
-            hook_save_reminder(chat_id, text, remind_at=remind_at)
-            save_task_to_notion(chat_id, text, remind_at, criticality=None)
+            if text and remind_at:
+                save_reminder(chat_id, text, remind_at)
+                hook_save_reminder(chat_id, text, remind_at=remind_at)
+                save_task_to_notion(chat_id, text, remind_at, criticality=None)
+            else:
+                print(f"⏳ Reminder incomplete (missing {'datetime' if not remind_at else 'text'}) — waiting for more info.")
 
     elif intent == "delete_reminder":
         if llm_response.reminder:
