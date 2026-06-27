@@ -426,3 +426,60 @@ def delete_local_reminder(chat_id: str, node_id: str) -> bool:
         record = result.single()
         return record is not None and record["deleted_count"] > 0
 
+
+def get_all_tasks(chat_id: str) -> list:
+    """Read all pending tasks from Neo4j for this user."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task)
+            WHERE t.status = 'pending'
+            RETURN elementId(t) as id, t.title as title, t.due as due
+            ORDER BY t.created_at ASC
+            """,
+            chat_id=chat_id
+        )
+        return [{"id": r["id"], "title": r["title"], "due": r["due"]} for r in result]
+
+
+def update_local_task(chat_id: str, node_id: str, title: str = None, due: str = None) -> bool:
+    """Update title and/or due date for an existing task."""
+    with get_session() as session:
+        sets = []
+        params = {"node_id": node_id, "chat_id": chat_id}
+        if title is not None:
+            sets.append("t.title = $title")
+            params["title"] = title
+        if due is not None:
+            sets.append("t.due = $due")
+            params["due"] = due
+
+        if not sets:
+            return True
+
+        query = f"""
+        MATCH (u:User {{chat_id: $chat_id}})-[:CREATED]->(t:Task)
+        WHERE elementId(t) = $node_id
+        SET {', '.join(sets)}
+        RETURN elementId(t) as node_id
+        """
+        result = session.run(query, **params)
+        return result.single() is not None
+
+
+def delete_local_task(chat_id: str, node_id: str) -> bool:
+    """Delete a task from Neo4j."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task)
+            WHERE elementId(t) = $node_id
+            DETACH DELETE t
+            RETURN count(t) as deleted_count
+            """,
+            chat_id=chat_id,
+            node_id=node_id
+        )
+        record = result.single()
+        return record is not None and record["deleted_count"] > 0
+

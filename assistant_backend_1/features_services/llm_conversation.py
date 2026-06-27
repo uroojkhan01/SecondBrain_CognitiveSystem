@@ -13,8 +13,12 @@ from assistant_backend_1.features_services.memory_journal import (
     save_habit,
     mark_task_done,
     mark_reminder_done,
-    update_entity
+    update_entity,
+    get_all_tasks,
+    delete_local_task,
+    update_local_task
 )
+from assistant_backend_1.features_services.notion import save_task_to_notion, delete_task_from_notion, update_task_in_notion
 from assistant_backend_1.features_services.notion_mcp import NotionAgent
 from assistant_backend_1.features_services.notion_workflow import NotionWorkflowManager
 import asyncio
@@ -218,18 +222,46 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
 
     elif intent == "create_task":
         if llm_response.task:
-            # Save to Neo4j locally
-            save_task(
-                chat_id,
-                llm_response.task.get("title"),
-                llm_response.task.get("due")
+            title = llm_response.task.get("title")
+            due = llm_response.task.get("due")
+            save_task(chat_id, title, due)
+            save_task_to_notion(chat_id, title, due)
+
+    elif intent == "delete_task":
+        if llm_response.task:
+            task_title = llm_response.task.get("title", "")
+            all_tasks = get_all_tasks(chat_id)
+            matched = next(
+                (t for t in all_tasks
+                 if task_title.lower() in t["title"].lower()
+                 or t["title"].lower() in task_title.lower()),
+                None
             )
-            log_to_notion_background(
-                chat_id,
-                user_input,
-                intent,
-                llm_response.task
+            if matched:
+                success = delete_local_task(chat_id, matched["id"])
+                print(f"{'✅' if success else '❌'} Delete task (Neo4j): {task_title}")
+            else:
+                print(f"⚠️ No matching task found in Neo4j: {task_title}")
+            delete_task_from_notion(chat_id, task_title)
+
+    elif intent == "update_task":
+        if llm_response.task:
+            task_title = llm_response.task.get("title", "")
+            new_title = llm_response.task.get("new_title")
+            new_due = llm_response.task.get("due")
+            all_tasks = get_all_tasks(chat_id)
+            matched = next(
+                (t for t in all_tasks
+                 if task_title.lower() in t["title"].lower()
+                 or t["title"].lower() in task_title.lower()),
+                None
             )
+            if matched:
+                success = update_local_task(chat_id, matched["id"], title=new_title, due=new_due)
+                print(f"{'✅' if success else '❌'} Update task (Neo4j): {task_title}")
+            else:
+                print(f"⚠️ No matching task found in Neo4j: {task_title}")
+            update_task_in_notion(chat_id, task_title, new_title=new_title, new_due=new_due)
 
     elif intent == "habit_track":
         if llm_response.habit:

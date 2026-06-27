@@ -226,6 +226,117 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         return False
 
 
+def find_task_in_notion(chat_id: str, title: str) -> str | None:
+    """Search the active tasks database for a page matching title. Returns page_id or None."""
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token or not database_id:
+        return None
+
+    schema = get_active_database_schema(chat_id)
+    title_col = get_column_name(schema, "title") or "Task Name"
+
+    try:
+        response = requests.post(
+            f"https://api.notion.com/v1/databases/{database_id}/query",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={
+                "filter": {
+                    "property": title_col,
+                    "title": {"contains": title}
+                }
+            }
+        )
+        results = response.json().get("results", [])
+        if results:
+            return results[0]["id"]
+    except Exception as e:
+        print(f"❌ Error finding task in Notion: {e}")
+    return None
+
+
+def delete_task_from_notion(chat_id: str, title: str) -> bool:
+    """Archive (soft-delete) a matching task page in Notion."""
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Task not found in Notion: {title}")
+        return False
+
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"archived": True}
+        )
+        if response.status_code == 200:
+            print(f"✅ Task archived in Notion: {title}")
+            return True
+        else:
+            print(f"❌ Notion archive error: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Error deleting task from Notion: {e}")
+        return False
+
+
+def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_due: str = None) -> bool:
+    """Update title and/or due date of a matching task page in Notion."""
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Task not found in Notion: {title}")
+        return False
+
+    schema = get_active_database_schema(chat_id)
+    title_col = get_column_name(schema, "title") or "Task Name"
+    date_col = get_column_name(schema, "date") or "Execution Date"
+
+    props = {}
+    if new_title:
+        props[title_col] = {"title": [{"text": {"content": str(new_title)}}]}
+    if new_due:
+        formatted_due = format_due_date_for_notion(new_due, token, database_id)
+        if formatted_due:
+            props[date_col] = {"date": {"start": formatted_due}}
+
+    if not props:
+        return True
+
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": props}
+        )
+        if response.status_code == 200:
+            print(f"✅ Task updated in Notion: {title}")
+            return True
+        else:
+            print(f"❌ Notion update error: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Error updating task in Notion: {e}")
+        return False
+
+
 def save_reminder_to_notion(chat_id: str, text: str, remind_at: str = None) -> bool:
     token, database_id = get_user_notion_credentials(chat_id)
 
