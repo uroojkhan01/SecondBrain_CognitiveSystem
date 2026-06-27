@@ -18,6 +18,7 @@ AREA_DB_FLAT_SCHEMA = {
     "Name": "title",
     "Date Logged": "date",
     "AI Executive Summary": "rich_text",
+    "Parent Task Link": "relation",
 }
 
 MASTER_PROJECTS_FLAT_SCHEMA = {
@@ -131,6 +132,69 @@ def _area_key(name: str) -> str:
     return name.lower().replace(" & ", "_").replace(" ", "_")
 
 
+def _patch_task_link(token: str, area_db_id: str, tasks_db_id: str) -> bool:
+    """Add 'Parent Task Link' relation property to an existing area database."""
+    response = requests.patch(
+        f"{NOTION_API}/databases/{area_db_id}",
+        headers=_headers(token),
+        json={
+            "properties": {
+                "Parent Task Link": {
+                    "relation": {
+                        "database_id": tasks_db_id,
+                        "type": "single_property",
+                        "single_property": {},
+                    }
+                }
+            }
+        },
+    )
+    if response.status_code != 200:
+        print(f"❌ Failed to patch area DB {area_db_id}: {response.json()}")
+        return False
+    return True
+
+
+def patch_area_task_links(chat_id: str, token: str) -> bool:
+    """
+    Patches existing area databases with the 'Parent Task Link' relation.
+    Safe to call if the relation already exists — Notion ignores duplicate property names.
+    """
+    users = load_users()
+    second_brain = users.get(str(chat_id), {}).get("second_brain", {})
+    dbs = second_brain.get("databases", {})
+    tasks_id = dbs.get("tasks_todos")
+
+    if not tasks_id:
+        print("❌ tasks_todos ID not found in user.json")
+        return False
+
+    area_keys = [_area_key(name) for name, _ in AREA_DATABASES]
+    success = True
+    for key in area_keys:
+        db_id = dbs.get(key)
+        if not db_id:
+            print(f"⚠️ No DB id found for area key: {key}")
+            continue
+        ok = _patch_task_link(token, db_id, tasks_id)
+        print(f"{'✅' if ok else '❌'} Parent Task Link patch: {key}")
+        if not ok:
+            success = False
+
+    # Update flat schemas in notion.database_ids
+    if success:
+        database_ids = users[str(chat_id)]["notion"].get("database_ids", [])
+        area_db_ids = set(dbs.get(k) for k in area_keys)
+        for db in database_ids:
+            if db["id"] in area_db_ids:
+                db["schema"]["Parent Task Link"] = "relation"
+        users[str(chat_id)]["notion"]["database_ids"] = database_ids
+        save_users(users)
+        print("✅ user.json schemas updated with Parent Task Link")
+
+    return success
+
+
 def _page_exists(token: str, page_id: str) -> bool:
     """Check whether a Notion page still exists and is accessible."""
     response = requests.get(
@@ -139,6 +203,71 @@ def _page_exists(token: str, page_id: str) -> bool:
     )
     data = response.json()
     return response.status_code == 200 and not data.get("archived", False)
+
+
+def _get_notion_title(obj: dict) -> str:
+    """Extract plain text title from a Notion page or database search result."""
+    if obj.get("object") == "database":
+        title_list = obj.get("title", [])
+        return title_list[0].get("plain_text", "").strip() if title_list else ""
+    else:
+        for prop in obj.get("properties", {}).values():
+            if prop.get("type") == "title":
+                title_list = prop.get("title", [])
+                return title_list[0].get("plain_text", "").strip() if title_list else ""
+    return ""
+
+
+def _notion_search(token: str, query: str, filter_type: str) -> list:
+    response = requests.post(
+        f"{NOTION_API}/search",
+        headers=_headers(token),
+        json={"query": query, "filter": {"property": "object", "value": filter_type}},
+    )
+    return response.json().get("results", [])
+
+
+def _find_by_title(results: list, title: str) -> str | None:
+    for r in results:
+        if not r.get("archived", False) and _get_notion_title(r) == title:
+            return r["id"]
+    return None
+
+
+def _search_notion_for_second_brain(token: str) -> dict | None:
+    """
+    Search Notion for an existing Second Brain page and its databases.
+    Returns a reconstruction dict on success, None if not found.
+    """
+    root_id = _find_by_title(_notion_search(token, "Second Brain", "page"), "Second Brain")
+    if not root_id:
+        return None
+
+    print(f"🔍 Found existing Second Brain page: {root_id}")
+
+    areas_page_id = _find_by_title(_notion_search(token, "Areas Boards", "page"), "Areas Boards")
+    projects_page_id = _find_by_title(_notion_search(token, "Project Directory", "page"), "Project Directory")
+
+    keyed_db_ids = {}
+    for name, _ in AREA_DATABASES:
+        db_id = _find_by_title(_notion_search(token, name, "database"), name)
+        if db_id:
+            keyed_db_ids[_area_key(name)] = db_id
+
+    master_id = _find_by_title(_notion_search(token, "Master Projects DB", "database"), "Master Projects DB")
+    if master_id:
+        keyed_db_ids["master_projects"] = master_id
+
+    tasks_id = _find_by_title(_notion_search(token, "Tasks and To Dos", "database"), "Tasks and To Dos")
+    if tasks_id:
+        keyed_db_ids["tasks_todos"] = tasks_id
+
+    return {
+        "root_id": root_id,
+        "areas_page_id": areas_page_id,
+        "projects_page_id": projects_page_id,
+        "keyed_db_ids": keyed_db_ids,
+    }
 
 
 def setup_second_brain(chat_id: str, token: str) -> str:
@@ -163,11 +292,46 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     """
     print(f"🧠 Setting up Second Brain for user {chat_id}...")
 
-    # ── 0. Skip if already set up and still alive in Notion ──────────
+    # ── 0a. Fast path: check user.json ───────────────────────────────
     users = load_users()
     existing = users.get(str(chat_id), {}).get("second_brain", {})
     if existing.get("page_id") and _page_exists(token, existing["page_id"]):
-        print(f"ℹ️ Second Brain already exists for {chat_id}, skipping creation.")
+        print(f"ℹ️ Second Brain already recorded in user.json for {chat_id}, skipping.")
+        return "exists"
+
+    # ── 0b. Search Notion for an existing Second Brain page ──────────
+    found = _search_notion_for_second_brain(token)
+    if found:
+        print(f"ℹ️ Existing Second Brain found in Notion — reconstructing user.json...")
+        keyed_db_ids = found["keyed_db_ids"]
+
+        # Build Second Brain database list
+        sb_database_list = []
+        for name, _ in AREA_DATABASES:
+            key = _area_key(name)
+            if key in keyed_db_ids:
+                sb_database_list.append({"id": keyed_db_ids[key], "name": name, "type": "database", "schema": AREA_DB_FLAT_SCHEMA})
+        if "master_projects" in keyed_db_ids:
+            sb_database_list.append({"id": keyed_db_ids["master_projects"], "name": "Master Projects DB", "type": "database", "schema": MASTER_PROJECTS_FLAT_SCHEMA})
+        if "tasks_todos" in keyed_db_ids:
+            sb_database_list.append({"id": keyed_db_ids["tasks_todos"], "name": "Tasks and To Dos", "type": "database", "schema": TASKS_FLAT_SCHEMA})
+
+        # Merge with existing OAuth database list (avoid duplicates)
+        users.setdefault(str(chat_id), {})
+        existing_list = users[str(chat_id)].get("notion", {}).get("database_ids", [])
+        existing_ids = {db["id"] for db in existing_list}
+        merged = existing_list + [db for db in sb_database_list if db["id"] not in existing_ids]
+
+        users[str(chat_id)]["notion"]["database_ids"] = merged
+        users[str(chat_id)]["notion"]["active_database_id"] = keyed_db_ids.get("tasks_todos")
+        users[str(chat_id)]["second_brain"] = {
+            "page_id": found["root_id"],
+            "areas_page_id": found["areas_page_id"],
+            "projects_page_id": found["projects_page_id"],
+            "databases": keyed_db_ids,
+        }
+        save_users(users)
+        print(f"✅ user.json reconstructed from existing Notion Second Brain for {chat_id}")
         return "exists"
 
     # ── 1. Root page ─────────────────────────────────────────────────
@@ -263,7 +427,13 @@ def setup_second_brain(chat_id: str, token: str) -> str:
         print(f"❌ {e}")
         return "failed"
 
-    # ── 5. Update user.json ──────────────────────────────────────────
+    # ── 5. Patch area DBs with Parent Task Link → Tasks & To Dos ─────
+    area_db_ids_list = [keyed_db_ids[_area_key(name)] for name, _ in AREA_DATABASES]
+    for area_db_id in area_db_ids_list:
+        ok = _patch_task_link(token, area_db_id, tasks_id)
+        print(f"{'✅' if ok else '❌'} Parent Task Link patch: {area_db_id}")
+
+    # ── 6. Update user.json ──────────────────────────────────────────
     users = load_users()
     users.setdefault(str(chat_id), {})
 

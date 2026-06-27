@@ -1,7 +1,7 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
 from assistant_backend_1.helpers import load_users, save_users
-from assistant_backend_1.features_services.notion_agent import setup_second_brain
+from assistant_backend_1.features_services.notion_agent import setup_second_brain, patch_area_task_links
 import asyncio
 import requests
 from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
@@ -146,6 +146,8 @@ async def notion_oauth_callback(request: Request):
     ])
 
     if status == "exists":
+        # Still patch area DBs in case new fields were added since last setup
+        await asyncio.to_thread(patch_area_task_links, chat_id, access_token)
         header = "🧠 Your Second Brain is already set up!\n\n"
     else:
         header = "🧠 Your Second Brain is ready!\n\n"
