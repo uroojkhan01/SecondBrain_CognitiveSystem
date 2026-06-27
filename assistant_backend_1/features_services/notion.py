@@ -298,6 +298,73 @@ def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
         return False
 
 
+def get_tasks_from_notion(chat_id: str) -> list:
+    """Fetch all non-done tasks from the Notion Tasks & To Dos database."""
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    user_data = users.get(str(chat_id), {})
+    token = user_data.get("notion", {}).get("token")
+    tasks_db_id = user_data.get("second_brain", {}).get("databases", {}).get("tasks_todos")
+
+    if not token or not tasks_db_id:
+        print(f"⚠️ No Notion tasks DB credentials for {chat_id}")
+        return []
+
+    try:
+        response = requests.post(
+            f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={
+                "filter": {
+                    "property": "Done",
+                    "checkbox": {"equals": False}
+                },
+                "sorts": [{"property": "Execution Date", "direction": "ascending"}]
+            },
+            timeout=30,
+        )
+        results = response.json().get("results", [])
+        tasks = []
+        for page in results:
+            props = page.get("properties", {})
+            title_parts = props.get("Task Name", {}).get("title", [])
+            title = "".join(t.get("plain_text", "") for t in title_parts).strip()
+            if not title:
+                continue
+            due = None
+            date_prop = props.get("Execution Date", {}).get("date")
+            if date_prop:
+                due = date_prop.get("start")
+            tasks.append({"page_id": page["id"], "title": title, "due": due})
+        return tasks
+    except Exception as e:
+        print(f"❌ Error fetching tasks from Notion: {e}")
+        return []
+
+
+def mark_task_done_by_page_id(token: str, page_id: str) -> bool:
+    """Set Done = True on a Notion task using its page ID directly."""
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": {"Done": {"checkbox": True}}},
+            timeout=30,
+        )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Error marking task done by page_id: {e}")
+        return False
+
+
 def delete_task_from_notion(chat_id: str, title: str) -> bool:
     """Archive (soft-delete) a matching task page in Notion."""
     token, _ = get_user_notion_credentials(chat_id)

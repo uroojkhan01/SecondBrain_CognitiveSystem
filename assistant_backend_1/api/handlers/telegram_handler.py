@@ -68,10 +68,10 @@ async def telegram_webhook(request: Request):
             await send_message(chat_id, "❌ Task organizing failed or there was nothing to move. Check logs for details.")
         return {"status": "ok"}
 
-    # /done command — show numbered list of pending tasks
+    # /done command — show numbered list of pending tasks from Notion
     if user_input.strip().lower() in ("/done", "/done@secondbrainbot", "/complete", "/complete@secondbrainbot"):
-        from assistant_backend_1.features_services.memory_journal import get_all_tasks
-        tasks = get_all_tasks(str(chat_id))
+        from assistant_backend_1.features_services.notion import get_tasks_from_notion
+        tasks = await asyncio.to_thread(get_tasks_from_notion, str(chat_id))
         if not tasks:
             await send_message(chat_id, "✅ You have no pending tasks!")
             return {"status": "ok"}
@@ -94,11 +94,15 @@ async def telegram_webhook(request: Request):
                 task = tasks[index]
                 del _pending_done_tasks[str(chat_id)]
                 from assistant_backend_1.features_services.memory_journal import mark_task_done, mark_reminder_done
-                from assistant_backend_1.features_services.notion import mark_task_done_in_notion
+                from assistant_backend_1.features_services.notion import mark_task_done_by_page_id, get_user_notion_credentials
+                # Mark done in Notion directly via page_id (no title search needed)
+                token, _ = get_user_notion_credentials(str(chat_id))
+                if token and task.get("page_id"):
+                    await asyncio.to_thread(mark_task_done_by_page_id, token, task["page_id"])
+                # Keep Neo4j + Postgres in sync
                 mark_task_done(str(chat_id), task["title"])
                 mark_reminder_done(str(chat_id), task["title"])
                 hook_mark_task_done(str(chat_id), task["title"])
-                await asyncio.to_thread(mark_task_done_in_notion, str(chat_id), task["title"])
                 await send_message(chat_id, f"✅ *{task['title']}* marked as done! Great work!")
                 return {"status": "ok"}
 
