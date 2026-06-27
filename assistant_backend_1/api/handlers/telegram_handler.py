@@ -94,11 +94,12 @@ async def telegram_webhook(request: Request):
                 task = tasks[index]
                 del _pending_done_tasks[str(chat_id)]
                 from assistant_backend_1.features_services.memory_journal import mark_task_done, mark_reminder_done
-                from assistant_backend_1.features_services.notion import mark_task_done_by_page_id, get_user_notion_credentials
+                from assistant_backend_1.features_services.notion import mark_task_done_by_page_id, get_user_notion_credentials, update_project_progress
                 # Mark done in Notion directly via page_id (no title search needed)
                 token, _ = get_user_notion_credentials(str(chat_id))
                 if token and task.get("page_id"):
                     await asyncio.to_thread(mark_task_done_by_page_id, token, task["page_id"])
+                    await asyncio.to_thread(update_project_progress, str(chat_id), task["page_id"])
                 # Keep Neo4j + Postgres in sync
                 mark_task_done(str(chat_id), task["title"])
                 mark_reminder_done(str(chat_id), task["title"])

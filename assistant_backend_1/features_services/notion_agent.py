@@ -224,14 +224,13 @@ def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
 
 def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> bool:
     """
-    One-time setup for progress tracking:
-    1. Add 'Done' checkbox to Tasks DB
-    2. Change 'Parent Project' relation to dual so Master Projects DB gets a 'Tasks' back-link
-    3. Add 'Total Tasks' and 'Done Tasks' rollup properties to Master Projects DB
-    4. Convert 'Progress Bar' from number to formula (done / total * 100)
+    One-time setup for progress tracking.
+    Adds the Done checkbox to Tasks DB.
+    Progress Bar is a plain Number on Master Projects DB — updated
+    programmatically via update_project_progress() whenever a task is marked done.
     Safe to call on every run — Notion ignores already-existing properties.
     """
-    # ── 1. Done checkbox on Tasks DB ─────────────────────────────────
+    # ── Done checkbox on Tasks DB ─────────────────────────────────────
     r = requests.patch(
         f"{NOTION_API}/databases/{tasks_db_id}",
         headers=_headers(token),
@@ -242,118 +241,6 @@ def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> b
         print(f"❌ Failed to add Done field: {r.json()}")
         return False
     print("✅ Done checkbox ready on Tasks DB")
-
-    # ── 2. Patch relation to dual ─────────────────────────────────────
-    r = requests.patch(
-        f"{NOTION_API}/databases/{tasks_db_id}",
-        headers=_headers(token),
-        json={
-            "properties": {
-                "Parent Project": {
-                    "relation": {
-                        "database_id": master_db_id,
-                        "type": "dual_property",
-                        "dual_property": {}
-                    }
-                }
-            }
-        },
-        timeout=30,
-    )
-    # Grab the auto-generated synced property name from the response
-    synced_name = None
-    if r.status_code == 200:
-        prop = r.json().get("properties", {}).get("Parent Project", {})
-        synced_name = (
-            prop.get("relation", {})
-                .get("dual_property", {})
-                .get("synced_property_name")
-        )
-        print(f"✅ Dual relation set — Master Projects back-link: '{synced_name}'")
-    else:
-        print(f"⚠️ Dual relation patch failed: {r.json()}")
-
-    # If we still don't have the synced name, read it directly from Master Projects DB
-    if not synced_name:
-        r2 = requests.get(
-            f"{NOTION_API}/databases/{master_db_id}",
-            headers=_headers(token),
-            timeout=30,
-        )
-        if r2.status_code == 200:
-            props = r2.json().get("properties", {})
-            for name, prop in props.items():
-                if prop.get("type") == "relation":
-                    rel_db = prop.get("relation", {}).get("database_id", "")
-                    if rel_db.replace("-", "") == tasks_db_id.replace("-", ""):
-                        synced_name = name
-                        print(f"✅ Found back-link on Master Projects DB: '{synced_name}'")
-                        break
-        if not synced_name:
-            print("❌ Could not determine back-link property name — skipping rollup setup")
-            return False
-
-    # ── 3. Rollup properties on Master Projects DB ────────────────────
-    r = requests.patch(
-        f"{NOTION_API}/databases/{master_db_id}",
-        headers=_headers(token),
-        json={
-            "properties": {
-                "Total Tasks": {
-                    "rollup": {
-                        "relation_property_name": synced_name,
-                        "rollup_property_name": "Task Name",
-                        "function": "count",
-                    }
-                },
-                "Done Tasks": {
-                    "rollup": {
-                        "relation_property_name": synced_name,
-                        "rollup_property_name": "Done",
-                        "function": "checked",
-                    }
-                },
-            }
-        },
-        timeout=30,
-    )
-    if r.status_code != 200:
-        print(f"❌ Failed to add rollup properties: {r.json()}")
-        return False
-    print("✅ Rollup properties added to Master Projects DB")
-
-    # ── 4. Delete any existing Progress Bar (may be a plain Number) then create as formula ──
-    # Notion API does not allow changing a property's type in-place, so we
-    # delete the old one first (set to null) and recreate it as a formula.
-    requests.patch(
-        f"{NOTION_API}/databases/{master_db_id}",
-        headers=_headers(token),
-        json={"properties": {"Progress Bar": None}},
-        timeout=30,
-    )
-
-    r = requests.patch(
-        f"{NOTION_API}/databases/{master_db_id}",
-        headers=_headers(token),
-        json={
-            "properties": {
-                "Progress Bar": {
-                    "formula": {
-                        "expression": (
-                            'if(prop("Total Tasks") == 0, 0, '
-                            'round(toNumber(prop("Done Tasks")) / '
-                            'toNumber(prop("Total Tasks")) * 100))'
-                        )
-                    }
-                }
-            }
-        },
-        timeout=30,
-    )
-    if r.status_code != 200:
-        print(f"❌ Failed to set Progress Bar formula: {r.json()}")
-        return False
-    print("✅ Progress Bar formula set on Master Projects DB")
     return True
 
 
