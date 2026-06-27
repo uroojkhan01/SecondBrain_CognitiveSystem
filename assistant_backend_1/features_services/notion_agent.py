@@ -592,7 +592,7 @@ def _call_task_agent(tasks: list) -> dict | None:
                 raise Exception("ANTHROPIC_API_KEY not set.")
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             resp = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=2048,
                 temperature=0,
                 system=_TASK_AGENT_PROMPT,

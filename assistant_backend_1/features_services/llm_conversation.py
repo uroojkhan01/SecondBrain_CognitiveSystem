@@ -303,7 +303,7 @@ def process_user_input(chat_id: str, user_input: str) -> str:
                 
                 # Claude requires system prompt separately, not in messages array
                 claude_response = claude_client.messages.create(
-                    model="claude-haiku-4-5-20251001",
+                    model="claude-sonnet-4-6",
                     max_tokens=1024,
                     temperature=0.2,
                     system=system_prompt,
@@ -328,7 +328,13 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         # ─────────────────────────────────────────
         # STEP 3: Parse response (same for both providers)
         # ─────────────────────────────────────────
-        data = json.loads(raw)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        data = json.loads(cleaned)
         
         llm_response = LLMResponse(
             intent=data.get("intent", "conversation"),
