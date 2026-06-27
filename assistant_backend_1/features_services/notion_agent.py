@@ -131,7 +131,17 @@ def _area_key(name: str) -> str:
     return name.lower().replace(" & ", "_").replace(" ", "_")
 
 
-def setup_second_brain(chat_id: str, token: str) -> bool:
+def _page_exists(token: str, page_id: str) -> bool:
+    """Check whether a Notion page still exists and is accessible."""
+    response = requests.get(
+        f"{NOTION_API}/pages/{page_id}",
+        headers=_headers(token),
+    )
+    data = response.json()
+    return response.status_code == 200 and not data.get("archived", False)
+
+
+def setup_second_brain(chat_id: str, token: str) -> str:
     """
     Creates the full Second Brain structure in Notion:
 
@@ -146,12 +156,19 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
       │   └── 📋 Master Projects DB      (database)
       └── ✅ Tasks and To Dos            (database)
 
-    On success appends all 7 databases to notion.database_ids, sets
-    active_database_id → Tasks & To Dos, and writes second_brain block.
-
-    Returns True on success, False on failure.
+    Returns:
+      "created"  — freshly built and saved
+      "exists"   — already set up, skipped
+      "failed"   — something went wrong
     """
     print(f"🧠 Setting up Second Brain for user {chat_id}...")
+
+    # ── 0. Skip if already set up and still alive in Notion ──────────
+    users = load_users()
+    existing = users.get(str(chat_id), {}).get("second_brain", {})
+    if existing.get("page_id") and _page_exists(token, existing["page_id"]):
+        print(f"ℹ️ Second Brain already exists for {chat_id}, skipping creation.")
+        return "exists"
 
     # ── 1. Root page ─────────────────────────────────────────────────
     try:
@@ -159,7 +176,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         print(f"✅ Second Brain page: {root_id}")
     except Exception as e:
         print(f"❌ {e}")
-        return False
+        return "failed"
 
     keyed_db_ids = {}
     database_list = []
@@ -170,7 +187,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         print(f"✅ Areas Boards page: {areas_page_id}")
     except Exception as e:
         print(f"❌ {e}")
-        return False
+        return "failed"
 
     for area_name, emoji in AREA_DATABASES:
         try:
@@ -185,7 +202,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
             print(f"✅ Area DB '{area_name}': {db_id}")
         except Exception as e:
             print(f"❌ {e}")
-            return False
+            return "failed"
 
     # ── 3. Project Directory sub-page + Master Projects DB ───────────
     try:
@@ -193,7 +210,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         print(f"✅ Project Directory page: {projects_page_id}")
     except Exception as e:
         print(f"❌ {e}")
-        return False
+        return "failed"
 
     try:
         master_id = _create_database(
@@ -209,7 +226,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         print(f"✅ Master Projects DB: {master_id}")
     except Exception as e:
         print(f"❌ {e}")
-        return False
+        return "failed"
 
     # ── 4. Tasks & To Dos (directly under root, relation → Master Projects) ──
     tasks_properties = {
@@ -244,7 +261,7 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         print(f"✅ Tasks & To Dos DB: {tasks_id}")
     except Exception as e:
         print(f"❌ {e}")
-        return False
+        return "failed"
 
     # ── 5. Update user.json ──────────────────────────────────────────
     users = load_users()
@@ -262,4 +279,4 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
 
     save_users(users)
     print(f"🎉 Second Brain setup complete for {chat_id}")
-    return True
+    return "created"

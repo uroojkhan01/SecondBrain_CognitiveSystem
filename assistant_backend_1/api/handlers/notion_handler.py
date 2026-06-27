@@ -118,31 +118,46 @@ async def notion_oauth_callback(request: Request):
     }
     save_users(users)
 
-    # Build Second Brain structure after OAuth
-    success = await asyncio.to_thread(setup_second_brain, chat_id, access_token)
-    if not success:
-        await send_message(chat_id, "⚠️ Notion connected, but Second Brain setup failed. Please try reconnecting.")
+    # Let the user know setup is in progress
+    await send_message(chat_id, "✅ Notion connected! Please wait, we are setting things up for you... 🛠️")
 
-    # Notify user
-    if len(database_list) > 1:
-        db_options = "\n".join([
-            f"{i+1}. {db['name']} ({db['type'].capitalize()})" for i, db in enumerate(database_list)
-        ])
-        await send_message(
-            chat_id,
-            f"✅ Notion connected!\n\n"
-            f"📚 Found {len(database_list)} pages/databases:\n\n"
-            f"{db_options}\n\n"
-            f"Reply with the number to select one.\n"
-            f"Currently using: *{database_list[0]['name']}*"
-        )
+    # Build Second Brain structure
+    status = await asyncio.to_thread(setup_second_brain, chat_id, access_token)
+
+    if status == "failed":
+        await send_message(chat_id, "⚠️ Second Brain setup failed. Please try reconnecting.")
+        return HTMLResponse("""
+            <html>
+            <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h2>⚠️ Setup Failed</h2>
+                <p>Go back to Telegram and try reconnecting.</p>
+            </body>
+            </html>
+        """)
+
+    # Reload users to get the full merged database list (OAuth + Second Brain)
+    users = load_users()
+    full_db_list = users[str(chat_id)]["notion"]["database_ids"]
+    active_id = users[str(chat_id)]["notion"]["active_database_id"]
+    active_name = next((db["name"] for db in full_db_list if db["id"] == active_id), "Tasks and To Dos")
+
+    db_options = "\n".join([
+        f"{i+1}. {db['name']} ({db['type'].capitalize()})" for i, db in enumerate(full_db_list)
+    ])
+
+    if status == "exists":
+        header = "🧠 Your Second Brain is already set up!\n\n"
     else:
-        await send_message(
-            chat_id,
-            f"✅ Notion connected!\n\n"
-            f"📚 Using: *{database_list[0]['name'] if database_list else 'No pages/databases found'}*\n\n"
-            f"You can now send me tasks!"
-        )
+        header = "🧠 Your Second Brain is ready!\n\n"
+
+    await send_message(
+        chat_id,
+        f"{header}"
+        f"📚 Available pages/databases:\n\n"
+        f"{db_options}\n\n"
+        f"Reply with the number to switch.\n"
+        f"Currently using: *{active_name}*"
+    )
 
     return HTMLResponse("""
         <html>
