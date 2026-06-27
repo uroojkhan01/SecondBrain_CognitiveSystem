@@ -534,19 +534,24 @@ AREA_NAME_TO_KEY = {
 
 _TASK_AGENT_PROMPT = """You are a Second Brain task organization agent.
 
-You will receive a JSON list of tasks (each with an id and title).
+You will receive a JSON object with:
+- "tasks": list of new tasks to organise (each with id and title)
+- "existing_projects": list of project names already in the user's Master Projects DB
+
 Your job is to:
 
 1. AREA CATEGORIZATION — assign each task to one of these areas (or null if unclear):
-   - "Health & Fitness": health, medical, exercise, diet, mental health, wellness, doctor, gym
-   - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses
-   - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development
-   - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading
-   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture
+   - "Health & Fitness": health, medical, exercise, diet, mental health, wellness, doctor, gym, pregnancy, checkups
+   - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses, savings
+   - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development, projects
+   - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading, travel, trips, flights, hotels, booking holidays, experiences, visiting places
+   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture, kids, renovation, birthdays, celebrations
 
-2. PROJECT DETECTION — identify groups of 2 or more tasks that together form a larger project.
-   Only create a project when you are confident multiple tasks clearly share one overarching goal.
-   Name projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
+2. PROJECT DETECTION — identify which project each task belongs to.
+   - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
+   - ONLY create a NEW project name if no existing project fits AND 2 or more new tasks clearly share one overarching goal.
+   - A single task can be linked to an existing project even on its own.
+   - Name new projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -560,9 +565,10 @@ Return ONLY valid JSON — no markdown, no explanation:
   ],
   "projects": [
     {
-      "name": "<Project Name Year>",
+      "name": "<Project Name — use exact existing name if applicable>",
+      "is_existing": true,
       "status": "Proposed",
-      "task_ids": ["<task_page_id>", "<task_page_id>"]
+      "task_ids": ["<task_page_id>"]
     }
   ]
 }"""
@@ -603,12 +609,41 @@ def _fetch_tasks(token: str, tasks_db_id: str) -> list:
     return tasks
 
 
-def _call_task_agent(tasks: list) -> dict | None:
+def _fetch_existing_projects(token: str, master_db_id: str) -> list:
+    """Return list of existing project names from Master Projects DB."""
+    try:
+        r = requests.post(
+            f"{NOTION_API}/databases/{master_db_id}/query",
+            headers=_headers(token),
+            json={},
+            timeout=30,
+        )
+        names = []
+        for page in r.json().get("results", []):
+            props = page.get("properties", {})
+            for prop in props.values():
+                if prop.get("type") == "title":
+                    title_parts = prop.get("title", [])
+                    name = "".join(t.get("plain_text", "") for t in title_parts).strip()
+                    if name:
+                        names.append({"name": name, "page_id": page["id"]})
+                    break
+        return names
+    except Exception as e:
+        print(f"⚠️ Could not fetch existing projects: {e}")
+        return []
+
+
+def _call_task_agent(tasks: list, existing_projects: list = None) -> dict | None:
     """
     Send tasks to Groq (with Claude fallback) for area categorization and project detection.
     Returns parsed JSON dict or None on failure.
     """
-    user_prompt = f"Analyze these tasks and return the JSON:\n{json.dumps(tasks, indent=2)}"
+    payload = {
+        "tasks": tasks,
+        "existing_projects": [p["name"] for p in (existing_projects or [])]
+    }
+    user_prompt = f"Analyse these tasks and return the JSON:\n{json.dumps(payload, indent=2)}"
     raw = None
 
     # Try Groq keys
@@ -785,13 +820,18 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
 
     print(f"📋 Fetched {len(tasks)} tasks for analysis.")
 
-    # ── 2. LLM analysis ──────────────────────────────────────────────
-    result = _call_task_agent(tasks)
+    # ── 2. Fetch existing projects for context ───────────────────────
+    existing_projects = _fetch_existing_projects(token, master_db_id)
+    existing_project_map = {p["name"]: p["page_id"] for p in existing_projects}
+    print(f"📁 Existing projects: {[p['name'] for p in existing_projects]}")
+
+    # ── 3. LLM analysis ──────────────────────────────────────────────
+    result = _call_task_agent(tasks, existing_projects)
     if not result:
         print("❌ Task agent returned no result.")
         return False
 
-    # ── 3. Create area entries ────────────────────────────────────────
+    # ── 4. Create area entries ────────────────────────────────────────
     categorizations = result.get("task_categorizations", [])
     task_map = {t["id"]: t for t in tasks}
 
@@ -818,18 +858,31 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
             print(f"✅ Area entry created: '{task['title']}' → {area}")
             _mark_task_organized(token, task_id)
 
-    # ── 4. Create projects + link tasks ──────────────────────────────
+    # ── 5. Link tasks to projects (existing or newly created) ────────
     for project in result.get("projects", []):
-        project_page_id = _create_project_entry(token, master_db_id, project)
-        if not project_page_id:
-            continue
+        project_name = project.get("name", "")
+        is_existing = project.get("is_existing", False)
 
-        print(f"✅ Project created: '{project['name']}'")
+        # Use existing project page_id if the agent matched one
+        if is_existing and project_name in existing_project_map:
+            project_page_id = existing_project_map[project_name]
+            print(f"🔗 Linking to existing project: '{project_name}'")
+        else:
+            project_page_id = _create_project_entry(token, master_db_id, project)
+            if not project_page_id:
+                continue
+            print(f"✅ Project created: '{project_name}'")
 
-        for task_id in project.get("task_ids", []):
+        linked_task_ids = project.get("task_ids", [])
+        for task_id in linked_task_ids:
             _link_task_to_project(token, task_id, project_page_id)
             task = task_map.get(task_id, {})
             print(f"   🔗 Linked task: '{task.get('title', task_id)}'")
+
+        # Recalculate Progress Bar now that tasks are linked
+        if linked_task_ids:
+            from assistant_backend_1.features_services.notion import update_project_progress
+            update_project_progress(chat_id, linked_task_ids[0])
 
     print("🎉 Task moving agent complete.")
     return True
