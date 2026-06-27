@@ -212,7 +212,7 @@ Return this exact JSON structure:
   ],
   "follow_up_question": "...",
   "reminder": { "text": "...", "new_text": "...", "datetime": "..." },
-  "task": { "title": "...", "new_title": "...", "due": "..." },
+  "task": { "title": "...", "new_title": "...", "due": "...", "criticality": "P1 - Critical | P2 - Important | P3 - Minor" },
   "habit": { "name": "...", "value": "..." },
   "items": []
 }
@@ -263,6 +263,14 @@ Rules:
   "don't forget to", "I'm supposed to", "I've got to" → ALWAYS create_task
 - CRITICAL: "delete", "remove", "cancel", "turn off" + reminder → ALWAYS "delete_reminder"
 - CRITICAL: "change", "update", "reschedule", "move", "shift" + reminder → ALWAYS "update_reminder"
+- For "create_task" — always populate task.criticality using these rules:
+  P1 - Critical: "urgent", "ASAP", "critical", "emergency", "must", deadline is today or tomorrow,
+                 health/safety/medical related, consequences if missed are serious
+  P2 - Important: "need to", "should", "important", "have to", deadline within the week,
+                  work deliverables, appointments, financial tasks
+  P3 - Minor: "want to", "someday", "maybe", "would like to", no deadline, low-stakes errands,
+              nice-to-haves, organisational tasks with no urgency
+  When uncertain, default to P2 - Important.
 - CRITICAL: "delete", "remove", "cancel", "drop" + task/to-do → ALWAYS "delete_task"
   → populate task.title with the task being deleted. Set all other fields to null.
   reply_to_user should warmly confirm deletion. Example: "Got it! I've removed that task. ✅"

@@ -160,22 +160,19 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
         print(f"❌ Error formatting date: {e}")
         return None
 
-def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
+def save_task_to_notion(chat_id: str, title: str, due: str = None, criticality: str = None) -> bool:
     token, database_id = get_user_notion_credentials(chat_id)
 
     if not token or not database_id:
         print(f"⚠️ No Notion credentials for {chat_id}")
         return False
 
-    # ← Get schema to find correct column names
     schema = get_active_database_schema(chat_id)
     print(f"📋 Using schema: {schema}")
 
-    # Find correct column names from schema
-    title_col = get_column_name(schema, "title") or "Task name"
-    date_col = get_column_name(schema, "date") or "Due date"
-    status_col = get_column_name(schema, "status") or None
-    checkbox_col = get_column_name(schema, "checkbox") or None
+    title_col = get_column_name(schema, "title") or "Task Name"
+    date_col = get_column_name(schema, "date") or "Execution Date"
+    criticality_col = get_column_name(schema, "select") or "Criticality"
 
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -184,25 +181,19 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         "Notion-Version": "2022-06-28"
     }
 
-    # Build props dynamically
     props = {
         title_col: {
             "title": [{"text": {"content": str(title)}}]
         }
     }
 
-    # Add status if column exists
-    if status_col:
-        props[status_col] = {"status": {"name": "Not started"}}
-
-    # Add checkbox if exists and no status
-    elif checkbox_col:
-        props[checkbox_col] = {"checkbox": False}
-
-    # Add due date
     formatted_due = format_due_date_for_notion(due, token, database_id)
     if formatted_due and date_col:
         props[date_col] = {"date": {"start": formatted_due}}
+
+    valid_criticalities = {"P1 - Critical", "P2 - Important", "P3 - Minor"}
+    if criticality in valid_criticalities and criticality_col:
+        props[criticality_col] = {"select": {"name": criticality}}
 
     try:
         response = requests.post(
@@ -215,7 +206,7 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         )
 
         if response.status_code == 200:
-            print(f"✅ Task saved to Notion: {title}")
+            print(f"✅ Task saved to Notion: {title} [{criticality}]")
             return True
         else:
             print(f"❌ Notion error: {response.text}")

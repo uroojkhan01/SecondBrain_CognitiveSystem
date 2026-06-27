@@ -224,8 +224,9 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
         if llm_response.task:
             title = llm_response.task.get("title")
             due = llm_response.task.get("due")
+            criticality = llm_response.task.get("criticality")
             save_task(chat_id, title, due)
-            save_task_to_notion(chat_id, title, due)
+            save_task_to_notion(chat_id, title, due, criticality)
 
     elif intent == "delete_task":
         if llm_response.task:
