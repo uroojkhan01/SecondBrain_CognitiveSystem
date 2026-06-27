@@ -307,6 +307,11 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     users = load_users()
     existing = users.get(str(chat_id), {}).get("second_brain", {})
     if existing.get("page_id") and _page_exists(token, existing["page_id"]):
+        # Refresh token in user.json so it stays in sync with Postgres
+        users.setdefault(str(chat_id), {})
+        users[str(chat_id)].setdefault("notion", {"token": token, "active_database_id": None, "database_ids": []})
+        users[str(chat_id)]["notion"]["token"] = token
+        save_users(users)
         print(f"ℹ️ Second Brain already recorded in user.json for {chat_id}, skipping.")
         return "exists"
 
