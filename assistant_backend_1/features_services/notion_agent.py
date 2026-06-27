@@ -37,6 +37,7 @@ TASKS_FLAT_SCHEMA = {
     "Execution Date": "date",
     "Criticality": "select",
     "Parent Project": "relation",
+    "Organized": "checkbox",
 }
 
 # Full Notion API property definitions
@@ -202,6 +203,21 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
         print("✅ user.json schemas updated with Parent Task Link")
 
     return success
+
+
+def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
+    """Add the 'Organized' checkbox property to an existing Tasks & To Dos database."""
+    response = requests.patch(
+        f"{NOTION_API}/databases/{tasks_db_id}",
+        headers=_headers(token),
+        json={"properties": {"Organized": {"checkbox": {}}}},
+        timeout=30,
+    )
+    if response.status_code == 200:
+        print("✅ 'Organized' checkbox added to Tasks & To Dos DB")
+        return True
+    print(f"❌ Failed to patch Tasks DB with Organized field: {response.json()}")
+    return False
 
 
 def _page_exists(token: str, page_id: str) -> bool:
@@ -433,6 +449,7 @@ def setup_second_brain(chat_id: str, token: str) -> str:
                 "single_property": {},
             }
         },
+        "Organized": {"checkbox": {}},
     }
     try:
         tasks_id = _create_database(token, root_id, "Tasks and To Dos", "✅", tasks_properties)
@@ -527,9 +544,14 @@ Return ONLY valid JSON — no markdown, no explanation:
 
 
 def _fetch_tasks(token: str, tasks_db_id: str) -> list:
-    """Fetch all non-archived tasks from the Tasks & To Dos database (handles pagination)."""
+    """Fetch unorganized, non-archived tasks from the Tasks & To Dos database."""
     tasks = []
-    payload = {}
+    payload = {
+        "filter": {
+            "property": "Organized",
+            "checkbox": {"equals": False}
+        }
+    }
     while True:
         response = requests.post(
             f"{NOTION_API}/databases/{tasks_db_id}/query",
@@ -670,6 +692,18 @@ def _create_project_entry(token: str, master_db_id: str, project: dict) -> str |
     return None
 
 
+def _mark_task_organized(token: str, task_id: str):
+    """Set Organized = True on a task so it is skipped in future agent runs."""
+    response = requests.patch(
+        f"{NOTION_API}/pages/{task_id}",
+        headers=_headers(token),
+        json={"properties": {"Organized": {"checkbox": True}}},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"❌ Failed to mark task {task_id} as organized: {response.text}")
+
+
 def _link_task_to_project(token: str, task_id: str, project_page_id: str):
     """Patch a task's Parent Project relation to point to a project page."""
     response = requests.patch(
@@ -711,7 +745,10 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         print("❌ Second Brain databases not found in user.json. Run setup first.")
         return False
 
-    # ── 1. Fetch tasks ────────────────────────────────────────────────
+    # ── 0. Ensure Tasks DB has the Organized checkbox ─────────────────
+    patch_tasks_organized_field(token, tasks_db_id)
+
+    # ── 1. Fetch unorganized tasks ────────────────────────────────────
     tasks = _fetch_tasks(token, tasks_db_id)
     if not tasks:
         print("ℹ️ No tasks found in Tasks & To Dos.")
@@ -750,6 +787,7 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         entry_id = _create_area_entry(token, area_db_id, task, ai_summary)
         if entry_id:
             print(f"✅ Area entry created: '{task['title']}' → {area}")
+            _mark_task_organized(token, task_id)
 
     # ── 4. Create projects + link tasks ──────────────────────────────
     for project in result.get("projects", []):
