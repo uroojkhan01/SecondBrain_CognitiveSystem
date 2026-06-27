@@ -121,41 +121,15 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
 
     elif intent == "set_reminder":
         if llm_response.reminder:
-            save_reminder(
-                chat_id,
-                llm_response.reminder.get("text"),
-                llm_response.reminder.get("datetime")
-            )
-            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
+            text = llm_response.reminder.get("text")
+            remind_at = llm_response.reminder.get("datetime")
+            save_reminder(chat_id, text, remind_at)
+            hook_save_reminder(chat_id, text, remind_at=remind_at)
+            save_task_to_notion(chat_id, text, remind_at, criticality=None)
+
     elif intent == "delete_reminder":
         if llm_response.reminder:
-            
-            # Get reminder text the LLM identified
             reminder_text = llm_response.reminder.get("text", "")
-            
-            # Fetch all reminders and find matching one
-            all_reminders = get_all_reminders(chat_id)
-            matched = next(
-                (r for r in all_reminders 
-                 if reminder_text.lower() in r["name"].lower() 
-                 or r["name"].lower() in reminder_text.lower()),
-                None
-            )
-            
-            if matched:
-                success = delete_reminder(chat_id, matched["id"])
-                print(f"{'✅' if success else '❌'} Delete reminder: {reminder_text}")
-            else:
-                print(f"⚠️ No matching reminder found for: {reminder_text}")
-
-    elif intent == "update_reminder":
-        if llm_response.reminder:
-            
-            reminder_text = llm_response.reminder.get("text", "")
-            new_datetime = llm_response.reminder.get("datetime")
-            new_text = llm_response.reminder.get("new_text")  # LLM provides updated text
-            
-            # Fetch all reminders and find matching one
             all_reminders = get_all_reminders(chat_id)
             matched = next(
                 (r for r in all_reminders
@@ -163,8 +137,26 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                  or r["name"].lower() in reminder_text.lower()),
                 None
             )
-            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
-            
+            if matched:
+                success = delete_reminder(chat_id, matched["id"])
+                print(f"{'✅' if success else '❌'} Delete reminder: {reminder_text}")
+            else:
+                print(f"⚠️ No matching reminder found for: {reminder_text}")
+            delete_task_from_notion(chat_id, reminder_text)
+
+    elif intent == "update_reminder":
+        if llm_response.reminder:
+            reminder_text = llm_response.reminder.get("text", "")
+            new_datetime = llm_response.reminder.get("datetime")
+            new_text = llm_response.reminder.get("new_text")
+            all_reminders = get_all_reminders(chat_id)
+            matched = next(
+                (r for r in all_reminders
+                 if reminder_text.lower() in r["name"].lower()
+                 or r["name"].lower() in reminder_text.lower()),
+                None
+            )
+            hook_save_reminder(chat_id, reminder_text, remind_at=new_datetime)
             if matched:
                 success = update_reminder(
                     chat_id,
@@ -175,6 +167,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 print(f"{'✅' if success else '❌'} Update reminder: {reminder_text}")
             else:
                 print(f"⚠️ No matching reminder found for: {reminder_text}")
+            update_task_in_notion(chat_id, reminder_text, new_title=new_text, new_due=new_datetime)
 
     elif intent == "create_task":
         if llm_response.task:
