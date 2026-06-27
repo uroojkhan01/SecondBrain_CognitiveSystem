@@ -22,7 +22,8 @@ from assistant_backend_1.features_services.notion import (
     save_task_to_notion,
     delete_task_from_notion,
     update_task_in_notion,
-    save_reminder_to_notion
+    save_reminder_to_notion,
+    mark_task_done_in_notion,
 )
 
 from assistant_backend_1.models.db_hooks import (
@@ -232,8 +233,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             title = llm_response.task.get("title")
             mark_task_done(chat_id, title)
             mark_reminder_done(chat_id, title)
-
-            hook_mark_task_done(chat_id, llm_response.task.get("title"))
+            hook_mark_task_done(chat_id, title)
+            mark_task_done_in_notion(chat_id, title)
 
             
 
@@ -328,7 +329,13 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         # ─────────────────────────────────────────
         # STEP 3: Parse response (same for both providers)
         # ─────────────────────────────────────────
-        data = json.loads(raw)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        data = json.loads(cleaned)
         
         llm_response = LLMResponse(
             intent=data.get("intent", "conversation"),

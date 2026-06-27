@@ -21,7 +21,7 @@ import schedule
 # ============================================
 USERS_FILE = "user.json"
 CHECK_INTERVAL_MINUTES = 5
-TASK_MOVING_INTERVAL_MINUTES = 5
+TASK_MOVING_INTERVAL_MINUTES = 30
 
 # ============================================
 # HELPERS
@@ -156,8 +156,62 @@ def delete_reminder(chat_id: str, page_id: str) -> bool:
 
 
 # ============================================
+# OVERDUE TASK AUTO-COMPLETION
+# ============================================
+
+def mark_overdue_tasks_done():
+    """
+    Auto-marks tasks as done if their Execution Date has passed.
+    Runs alongside the reminder check on every scheduler tick.
+    """
+    from assistant_backend_1.features_services.memory_journal import get_all_tasks, mark_task_done, mark_reminder_done
+    from assistant_backend_1.models.db_hooks import hook_mark_task_done
+    from assistant_backend_1.features_services.notion import mark_task_done_in_notion
+
+    users = load_users()
+    now = datetime.now(pytz.utc)
+
+    for chat_id in users:
+        try:
+            tasks = get_all_tasks(chat_id)
+            for task in tasks:
+                due_str = task.get("due")
+                if not due_str:
+                    continue
+                try:
+                    due = datetime.fromisoformat(due_str)
+                    if due.tzinfo is None:
+                        due = pytz.timezone("Europe/Berlin").localize(due)
+                    if now >= due.astimezone(pytz.utc):
+                        title = task.get("title")
+                        mark_task_done(chat_id, title)
+                        mark_reminder_done(chat_id, title)
+                        hook_mark_task_done(chat_id, title)
+                        mark_task_done_in_notion(chat_id, title)
+                        print(f"✅ Auto-marked overdue task done: '{title}' for {chat_id}")
+                except Exception as e:
+                    print(f"❌ Error parsing due date for task '{task.get('title')}': {e}")
+        except Exception as e:
+            print(f"❌ Error auto-marking tasks for {chat_id}: {e}")
+
+
+# ============================================
 # TASK MOVING AGENT JOB
 # ============================================
+
+def sync_progress_bars_for_all_users():
+    """Recalculate Progress Bar for every project for every user every 10 minutes."""
+    from assistant_backend_1.features_services.notion import sync_all_project_progress
+    users = load_users()
+    for chat_id, user_data in users.items():
+        second_brain = user_data.get("second_brain", {})
+        if not second_brain.get("databases", {}).get("master_projects"):
+            continue
+        try:
+            sync_all_project_progress(chat_id)
+        except Exception as e:
+            print(f"❌ Progress sync failed for {chat_id}: {e}")
+
 
 def run_task_moving_for_all_users():
     """
@@ -191,13 +245,17 @@ def run_task_moving_for_all_users():
 def start_reminder_scheduler():
     """Call this from app.py / lifespan to start scheduler in background."""
     print(f"🚀 Reminder scheduler starting...")
-    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min")
+    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Overdue check: twice daily | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min | Progress sync: every 10 min")
 
-    check_and_remind()  # run once immediately on startup
-    run_task_moving_for_all_users()  # run once immediately on startup
+    check_and_remind()
+    mark_overdue_tasks_done()
+    run_task_moving_for_all_users()
+    sync_progress_bars_for_all_users()
 
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_and_remind)
+    schedule.every(12).hours.do(mark_overdue_tasks_done)
     schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
+    schedule.every(10).minutes.do(sync_progress_bars_for_all_users)
 
     while True:
         schedule.run_pending()

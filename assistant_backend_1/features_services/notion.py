@@ -268,6 +268,217 @@ def find_task_in_notion(chat_id: str, title: str) -> str | None:
     return None
 
 
+def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
+    """Set Done = True on the matching task so Master Projects rollup updates."""
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Could not find Notion task to mark done: {title}")
+        return False
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": {"Done": {"checkbox": True}}},
+            timeout=30,
+        )
+        if response.status_code == 200:
+            print(f"✅ Task marked done in Notion: {title}")
+            update_project_progress(chat_id, page_id)
+            return True
+        print(f"❌ Failed to mark task done in Notion: {response.text}")
+        return False
+    except Exception as e:
+        print(f"❌ Error marking task done in Notion: {e}")
+        return False
+
+
+def update_project_progress(chat_id: str, task_page_id: str) -> None:
+    """Recalculate and update Progress Bar on any Master Projects linked to this task."""
+    from assistant_backend_1.helpers import load_users
+
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    try:
+        r = requests.get(f"https://api.notion.com/v1/pages/{task_page_id}", headers=headers, timeout=30)
+        if r.status_code != 200:
+            return
+        parent_refs = r.json().get("properties", {}).get("Parent Project", {}).get("relation", [])
+    except Exception as e:
+        print(f"❌ Error fetching task page for progress update: {e}")
+        return
+
+    if not parent_refs:
+        return
+
+    users = load_users()
+    tasks_db_id = users.get(str(chat_id), {}).get("second_brain", {}).get("databases", {}).get("tasks_todos")
+    if not tasks_db_id:
+        return
+
+    for ref in parent_refs:
+        project_page_id = ref["id"]
+        try:
+            r = requests.post(
+                f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
+                headers=headers,
+                json={"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}},
+                timeout=30,
+            )
+            results = r.json().get("results", [])
+            total = len(results)
+            done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
+            progress = round(done / total * 100) if total > 0 else 0
+
+            requests.patch(
+                f"https://api.notion.com/v1/pages/{project_page_id}",
+                headers=headers,
+                json={"properties": {"Progress Bar": {"number": progress}}},
+                timeout=30,
+            )
+            print(f"✅ Progress Bar: {done}/{total} = {progress}% for project {project_page_id}")
+        except Exception as e:
+            print(f"❌ Error updating progress for project {project_page_id}: {e}")
+
+
+def sync_all_project_progress(chat_id: str) -> None:
+    """
+    Recalculate Progress Bar for every project in Master Projects DB.
+    Runs on a schedule so manual Notion changes are picked up automatically.
+    """
+    from assistant_backend_1.helpers import load_users
+
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return
+
+    users = load_users()
+    second_brain = users.get(str(chat_id), {}).get("second_brain", {})
+    tasks_db_id = second_brain.get("databases", {}).get("tasks_todos")
+    master_db_id = second_brain.get("databases", {}).get("master_projects")
+    if not tasks_db_id or not master_db_id:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    try:
+        r = requests.post(f"https://api.notion.com/v1/databases/{master_db_id}/query",
+                          headers=headers, json={}, timeout=30)
+        projects = r.json().get("results", [])
+    except Exception as e:
+        print(f"❌ Could not fetch projects for progress sync: {e}")
+        return
+
+    for project in projects:
+        project_page_id = project["id"]
+        try:
+            r = requests.post(
+                f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
+                headers=headers,
+                json={"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}},
+                timeout=30,
+            )
+            results = r.json().get("results", [])
+            total = len(results)
+            done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
+            progress = round(done / total * 100) if total > 0 else 0
+
+            requests.patch(
+                f"https://api.notion.com/v1/pages/{project_page_id}",
+                headers=headers,
+                json={"properties": {"Progress Bar": {"number": progress}}},
+                timeout=30,
+            )
+            print(f"✅ Progress sync: {done}/{total} = {progress}%")
+        except Exception as e:
+            print(f"❌ Progress sync error for project {project_page_id}: {e}")
+
+
+def get_tasks_from_notion(chat_id: str) -> list:
+    """Fetch all non-done tasks from the Notion Tasks & To Dos database."""
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    user_data = users.get(str(chat_id), {})
+    token = user_data.get("notion", {}).get("token")
+    tasks_db_id = user_data.get("second_brain", {}).get("databases", {}).get("tasks_todos")
+
+    if not token or not tasks_db_id:
+        print(f"⚠️ No Notion tasks DB credentials for {chat_id}")
+        return []
+
+    try:
+        response = requests.post(
+            f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={
+                "filter": {
+                    "property": "Done",
+                    "checkbox": {"equals": False}
+                },
+                "sorts": [{"property": "Execution Date", "direction": "ascending"}]
+            },
+            timeout=30,
+        )
+        results = response.json().get("results", [])
+        tasks = []
+        for page in results:
+            props = page.get("properties", {})
+            title_parts = props.get("Task Name", {}).get("title", [])
+            title = "".join(t.get("plain_text", "") for t in title_parts).strip()
+            if not title:
+                continue
+            due = None
+            date_prop = props.get("Execution Date", {}).get("date")
+            if date_prop:
+                due = date_prop.get("start")
+            tasks.append({"page_id": page["id"], "title": title, "due": due})
+        return tasks
+    except Exception as e:
+        print(f"❌ Error fetching tasks from Notion: {e}")
+        return []
+
+
+def mark_task_done_by_page_id(token: str, page_id: str) -> bool:
+    """Set Done = True on a Notion task using its page ID directly."""
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": {"Done": {"checkbox": True}}},
+            timeout=30,
+        )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"❌ Error marking task done by page_id: {e}")
+        return False
+
+
 def delete_task_from_notion(chat_id: str, title: str) -> bool:
     """Archive (soft-delete) a matching task page in Notion."""
     token, _ = get_user_notion_credentials(chat_id)

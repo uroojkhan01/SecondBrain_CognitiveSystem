@@ -1,4 +1,5 @@
 import json
+from datetime import date
 import requests
 from groq import Groq
 import anthropic
@@ -37,6 +38,8 @@ TASKS_FLAT_SCHEMA = {
     "Execution Date": "date",
     "Criticality": "select",
     "Parent Project": "relation",
+    "Organized": "checkbox",
+    "Done": "checkbox",
 }
 
 # Full Notion API property definitions
@@ -59,7 +62,7 @@ MASTER_PROJECTS_PROPERTIES = {
         }
     },
     "Target Deadline": {"date": {}},
-    "Progress Bar": {"number": {"format": "percent"}},
+    # Progress Bar is created as a formula by patch_done_and_rollups() — not here
 }
 
 
@@ -202,6 +205,43 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
         print("✅ user.json schemas updated with Parent Task Link")
 
     return success
+
+
+def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
+    """Add the 'Organized' checkbox property to an existing Tasks & To Dos database."""
+    response = requests.patch(
+        f"{NOTION_API}/databases/{tasks_db_id}",
+        headers=_headers(token),
+        json={"properties": {"Organized": {"checkbox": {}}}},
+        timeout=30,
+    )
+    if response.status_code == 200:
+        print("✅ 'Organized' checkbox added to Tasks & To Dos DB")
+        return True
+    print(f"❌ Failed to patch Tasks DB with Organized field: {response.json()}")
+    return False
+
+
+def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> bool:
+    """
+    One-time setup for progress tracking.
+    Adds the Done checkbox to Tasks DB.
+    Progress Bar is a plain Number on Master Projects DB — updated
+    programmatically via update_project_progress() whenever a task is marked done.
+    Safe to call on every run — Notion ignores already-existing properties.
+    """
+    # ── Done checkbox on Tasks DB ─────────────────────────────────────
+    r = requests.patch(
+        f"{NOTION_API}/databases/{tasks_db_id}",
+        headers=_headers(token),
+        json={"properties": {"Done": {"checkbox": {}}}},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"❌ Failed to add Done field: {r.json()}")
+        return False
+    print("✅ Done checkbox ready on Tasks DB")
+    return True
 
 
 def _page_exists(token: str, page_id: str) -> bool:
@@ -433,6 +473,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
                 "single_property": {},
             }
         },
+        "Organized": {"checkbox": {}},
+        "Done": {"checkbox": {}},
     }
     try:
         tasks_id = _create_database(token, root_id, "Tasks and To Dos", "✅", tasks_properties)
@@ -492,19 +534,24 @@ AREA_NAME_TO_KEY = {
 
 _TASK_AGENT_PROMPT = """You are a Second Brain task organization agent.
 
-You will receive a JSON list of tasks (each with an id and title).
+You will receive a JSON object with:
+- "tasks": list of new tasks to organise (each with id and title)
+- "existing_projects": list of project names already in the user's Master Projects DB
+
 Your job is to:
 
 1. AREA CATEGORIZATION — assign each task to one of these areas (or null if unclear):
-   - "Health & Fitness": health, medical, exercise, diet, mental health, wellness, doctor, gym
-   - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses
-   - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development
-   - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading
-   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture
+   - "Health & Fitness": health, medical, exercise, diet, mental health, wellness, doctor, gym, pregnancy, checkups
+   - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses, savings
+   - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development, projects
+   - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading, travel, trips, flights, hotels, booking holidays, experiences, visiting places
+   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture, kids, renovation, birthdays, celebrations
 
-2. PROJECT DETECTION — identify groups of 2 or more tasks that together form a larger project.
-   Only create a project when you are confident multiple tasks clearly share one overarching goal.
-   Name projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
+2. PROJECT DETECTION — identify which project each task belongs to.
+   - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
+   - ONLY create a NEW project name if no existing project fits AND 2 or more new tasks clearly share one overarching goal.
+   - A single task can be linked to an existing project even on its own.
+   - Name new projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -518,18 +565,24 @@ Return ONLY valid JSON — no markdown, no explanation:
   ],
   "projects": [
     {
-      "name": "<Project Name Year>",
+      "name": "<Project Name — use exact existing name if applicable>",
+      "is_existing": true,
       "status": "Proposed",
-      "task_ids": ["<task_page_id>", "<task_page_id>"]
+      "task_ids": ["<task_page_id>"]
     }
   ]
 }"""
 
 
 def _fetch_tasks(token: str, tasks_db_id: str) -> list:
-    """Fetch all non-archived tasks from the Tasks & To Dos database (handles pagination)."""
+    """Fetch unorganized, non-archived tasks from the Tasks & To Dos database."""
     tasks = []
-    payload = {}
+    payload = {
+        "filter": {
+            "property": "Organized",
+            "checkbox": {"equals": False}
+        }
+    }
     while True:
         response = requests.post(
             f"{NOTION_API}/databases/{tasks_db_id}/query",
@@ -556,12 +609,41 @@ def _fetch_tasks(token: str, tasks_db_id: str) -> list:
     return tasks
 
 
-def _call_task_agent(tasks: list) -> dict | None:
+def _fetch_existing_projects(token: str, master_db_id: str) -> list:
+    """Return list of existing project names from Master Projects DB."""
+    try:
+        r = requests.post(
+            f"{NOTION_API}/databases/{master_db_id}/query",
+            headers=_headers(token),
+            json={},
+            timeout=30,
+        )
+        names = []
+        for page in r.json().get("results", []):
+            props = page.get("properties", {})
+            for prop in props.values():
+                if prop.get("type") == "title":
+                    title_parts = prop.get("title", [])
+                    name = "".join(t.get("plain_text", "") for t in title_parts).strip()
+                    if name:
+                        names.append({"name": name, "page_id": page["id"]})
+                    break
+        return names
+    except Exception as e:
+        print(f"⚠️ Could not fetch existing projects: {e}")
+        return []
+
+
+def _call_task_agent(tasks: list, existing_projects: list = None) -> dict | None:
     """
     Send tasks to Groq (with Claude fallback) for area categorization and project detection.
     Returns parsed JSON dict or None on failure.
     """
-    user_prompt = f"Analyze these tasks and return the JSON:\n{json.dumps(tasks, indent=2)}"
+    payload = {
+        "tasks": tasks,
+        "existing_projects": [p["name"] for p in (existing_projects or [])]
+    }
+    user_prompt = f"Analyse these tasks and return the JSON:\n{json.dumps(payload, indent=2)}"
     raw = None
 
     # Try Groq keys
@@ -605,9 +687,17 @@ def _call_task_agent(tasks: list) -> dict | None:
             return None
 
     try:
-        return json.loads(raw)
+        # Strip markdown code fences Claude sometimes adds despite instructions
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        return json.loads(cleaned)
     except Exception as e:
         print(f"[TaskAgent] JSON parse error: {e}")
+        print(f"[TaskAgent] Raw response was: {repr(raw)}")
         return None
 
 
@@ -621,6 +711,9 @@ def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str)
             "properties": {
                 "Name": {
                     "title": [{"text": {"content": task["title"]}}]
+                },
+                "Date Logged": {
+                    "date": {"start": date.today().isoformat()}
                 },
                 "AI Executive Summary": {
                     "rich_text": [{"text": {"content": ai_summary}}]
@@ -660,6 +753,18 @@ def _create_project_entry(token: str, master_db_id: str, project: dict) -> str |
         return response.json()["id"]
     print(f"❌ Failed to create project entry: {response.text}")
     return None
+
+
+def _mark_task_organized(token: str, task_id: str):
+    """Set Organized = True on a task so it is skipped in future agent runs."""
+    response = requests.patch(
+        f"{NOTION_API}/pages/{task_id}",
+        headers=_headers(token),
+        json={"properties": {"Organized": {"checkbox": True}}},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"❌ Failed to mark task {task_id} as organized: {response.text}")
 
 
 def _link_task_to_project(token: str, task_id: str, project_page_id: str):
@@ -703,7 +808,11 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         print("❌ Second Brain databases not found in user.json. Run setup first.")
         return False
 
-    # ── 1. Fetch tasks ────────────────────────────────────────────────
+    # ── 0. Ensure schema fields and rollups are in place ─────────────
+    patch_tasks_organized_field(token, tasks_db_id)
+    patch_done_and_rollups(token, tasks_db_id, master_db_id)
+
+    # ── 1. Fetch unorganized tasks ────────────────────────────────────
     tasks = _fetch_tasks(token, tasks_db_id)
     if not tasks:
         print("ℹ️ No tasks found in Tasks & To Dos.")
@@ -711,13 +820,18 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
 
     print(f"📋 Fetched {len(tasks)} tasks for analysis.")
 
-    # ── 2. LLM analysis ──────────────────────────────────────────────
-    result = _call_task_agent(tasks)
+    # ── 2. Fetch existing projects for context ───────────────────────
+    existing_projects = _fetch_existing_projects(token, master_db_id)
+    existing_project_map = {p["name"]: p["page_id"] for p in existing_projects}
+    print(f"📁 Existing projects: {[p['name'] for p in existing_projects]}")
+
+    # ── 3. LLM analysis ──────────────────────────────────────────────
+    result = _call_task_agent(tasks, existing_projects)
     if not result:
         print("❌ Task agent returned no result.")
         return False
 
-    # ── 3. Create area entries ────────────────────────────────────────
+    # ── 4. Create area entries ────────────────────────────────────────
     categorizations = result.get("task_categorizations", [])
     task_map = {t["id"]: t for t in tasks}
 
@@ -739,22 +853,36 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         if not task:
             continue
 
-        entry_id = _create_area_entry(token, area_db_id, task, ai_summary, tasks_db_id)
+        entry_id = _create_area_entry(token, area_db_id, task, ai_summary)
         if entry_id:
             print(f"✅ Area entry created: '{task['title']}' → {area}")
+            _mark_task_organized(token, task_id)
 
-    # ── 4. Create projects + link tasks ──────────────────────────────
+    # ── 5. Link tasks to projects (existing or newly created) ────────
     for project in result.get("projects", []):
-        project_page_id = _create_project_entry(token, master_db_id, project)
-        if not project_page_id:
-            continue
+        project_name = project.get("name", "")
+        is_existing = project.get("is_existing", False)
 
-        print(f"✅ Project created: '{project['name']}'")
+        # Use existing project page_id if the agent matched one
+        if is_existing and project_name in existing_project_map:
+            project_page_id = existing_project_map[project_name]
+            print(f"🔗 Linking to existing project: '{project_name}'")
+        else:
+            project_page_id = _create_project_entry(token, master_db_id, project)
+            if not project_page_id:
+                continue
+            print(f"✅ Project created: '{project_name}'")
 
-        for task_id in project.get("task_ids", []):
+        linked_task_ids = project.get("task_ids", [])
+        for task_id in linked_task_ids:
             _link_task_to_project(token, task_id, project_page_id)
             task = task_map.get(task_id, {})
             print(f"   🔗 Linked task: '{task.get('title', task_id)}'")
+
+        # Recalculate Progress Bar now that tasks are linked
+        if linked_task_ids:
+            from assistant_backend_1.features_services.notion import update_project_progress
+            update_project_progress(chat_id, linked_task_ids[0])
 
     print("🎉 Task moving agent complete.")
     return True
