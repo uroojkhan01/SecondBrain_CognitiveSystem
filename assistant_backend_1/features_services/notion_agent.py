@@ -1,4 +1,5 @@
 import json
+from datetime import date
 import requests
 from groq import Groq
 import anthropic
@@ -38,6 +39,7 @@ TASKS_FLAT_SCHEMA = {
     "Criticality": "select",
     "Parent Project": "relation",
     "Organized": "checkbox",
+    "Done": "checkbox",
 }
 
 # Full Notion API property definitions
@@ -60,7 +62,8 @@ MASTER_PROJECTS_PROPERTIES = {
         }
     },
     "Target Deadline": {"date": {}},
-    "Progress Bar": {"number": {"format": "percent"}},
+    # Progress Bar becomes a formula after patch_done_and_rollups() runs
+    "Progress Bar": {"number": {"format": "number"}},
 }
 
 
@@ -218,6 +221,111 @@ def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
         return True
     print(f"❌ Failed to patch Tasks DB with Organized field: {response.json()}")
     return False
+
+
+def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> bool:
+    """
+    One-time setup for progress tracking:
+    1. Add 'Done' checkbox to Tasks DB
+    2. Change 'Parent Project' relation to dual so Master Projects DB gets a 'Tasks' back-link
+    3. Add 'Total Tasks' and 'Done Tasks' rollup properties to Master Projects DB
+    4. Convert 'Progress Bar' from number to formula (done / total * 100)
+    Safe to call on every run — Notion ignores already-existing properties.
+    """
+    # ── 1. Done checkbox on Tasks DB ─────────────────────────────────
+    r = requests.patch(
+        f"{NOTION_API}/databases/{tasks_db_id}",
+        headers=_headers(token),
+        json={"properties": {"Done": {"checkbox": {}}}},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"❌ Failed to add Done field: {r.json()}")
+        return False
+    print("✅ Done checkbox ready on Tasks DB")
+
+    # ── 2. Patch relation to dual ─────────────────────────────────────
+    r = requests.patch(
+        f"{NOTION_API}/databases/{tasks_db_id}",
+        headers=_headers(token),
+        json={
+            "properties": {
+                "Parent Project": {
+                    "relation": {
+                        "type": "dual_property",
+                        "dual_property": {}
+                    }
+                }
+            }
+        },
+        timeout=30,
+    )
+    # Grab the auto-generated synced property name from the response
+    synced_name = "Parent Project"  # Notion default fallback
+    if r.status_code == 200:
+        prop = r.json().get("properties", {}).get("Parent Project", {})
+        synced_name = (
+            prop.get("relation", {})
+                .get("dual_property", {})
+                .get("synced_property_name", synced_name)
+        )
+        print(f"✅ Dual relation set — Master Projects back-link: '{synced_name}'")
+    else:
+        print(f"⚠️ Dual relation patch failed (may already be dual): {r.json()}")
+
+    # ── 3. Rollup properties on Master Projects DB ────────────────────
+    r = requests.patch(
+        f"{NOTION_API}/databases/{master_db_id}",
+        headers=_headers(token),
+        json={
+            "properties": {
+                "Total Tasks": {
+                    "rollup": {
+                        "relation_property_name": synced_name,
+                        "rollup_property_name": "Task Name",
+                        "function": "count",
+                    }
+                },
+                "Done Tasks": {
+                    "rollup": {
+                        "relation_property_name": synced_name,
+                        "rollup_property_name": "Done",
+                        "function": "checked",
+                    }
+                },
+            }
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"❌ Failed to add rollup properties: {r.json()}")
+        return False
+    print("✅ Rollup properties added to Master Projects DB")
+
+    # ── 4. Convert Progress Bar to formula ────────────────────────────
+    r = requests.patch(
+        f"{NOTION_API}/databases/{master_db_id}",
+        headers=_headers(token),
+        json={
+            "properties": {
+                "Progress Bar": {
+                    "formula": {
+                        "expression": (
+                            'if(prop("Total Tasks") == 0, 0, '
+                            'round(toNumber(prop("Done Tasks")) / '
+                            'toNumber(prop("Total Tasks")) * 100))'
+                        )
+                    }
+                }
+            }
+        },
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"❌ Failed to set Progress Bar formula: {r.json()}")
+        return False
+    print("✅ Progress Bar formula set on Master Projects DB")
+    return True
 
 
 def _page_exists(token: str, page_id: str) -> bool:
@@ -450,6 +558,7 @@ def setup_second_brain(chat_id: str, token: str) -> str:
             }
         },
         "Organized": {"checkbox": {}},
+        "Done": {"checkbox": {}},
     }
     try:
         tasks_id = _create_database(token, root_id, "Tasks and To Dos", "✅", tasks_properties)
@@ -652,6 +761,9 @@ def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str)
                 "Name": {
                     "title": [{"text": {"content": task["title"]}}]
                 },
+                "Date Logged": {
+                    "date": {"start": date.today().isoformat()}
+                },
                 "AI Executive Summary": {
                     "rich_text": [{"text": {"content": ai_summary}}]
                 },
@@ -745,8 +857,9 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         print("❌ Second Brain databases not found in user.json. Run setup first.")
         return False
 
-    # ── 0. Ensure Tasks DB has the Organized checkbox ─────────────────
+    # ── 0. Ensure schema fields and rollups are in place ─────────────
     patch_tasks_organized_field(token, tasks_db_id)
+    patch_done_and_rollups(token, tasks_db_id, master_db_id)
 
     # ── 1. Fetch unorganized tasks ────────────────────────────────────
     tasks = _fetch_tasks(token, tasks_db_id)

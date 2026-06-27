@@ -268,6 +268,36 @@ def find_task_in_notion(chat_id: str, title: str) -> str | None:
     return None
 
 
+def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
+    """Set Done = True on the matching task so Master Projects rollup updates."""
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Could not find Notion task to mark done: {title}")
+        return False
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": {"Done": {"checkbox": True}}},
+            timeout=30,
+        )
+        if response.status_code == 200:
+            print(f"✅ Task marked done in Notion: {title}")
+            return True
+        print(f"❌ Failed to mark task done in Notion: {response.text}")
+        return False
+    except Exception as e:
+        print(f"❌ Error marking task done in Notion: {e}")
+        return False
+
+
 def delete_task_from_notion(chat_id: str, title: str) -> bool:
     """Archive (soft-delete) a matching task page in Notion."""
     token, _ = get_user_notion_credentials(chat_id)

@@ -1,12 +1,15 @@
 from fastapi import Request
 from assistant_backend_1.helpers import load_users, save_users
 from assistant_backend_1.models.db_helpers import save_user, get_oauth_url, is_notion_connected
-from assistant_backend_1.models.db_hooks import hook_upsert_user, hook_save_message, hook_save_capture, hook_save_voice_message
+from assistant_backend_1.models.db_hooks import hook_upsert_user, hook_save_message, hook_save_capture, hook_save_voice_message, hook_mark_task_done
 from assistant_backend_1.features_services.telegram import send_message, process_voice_message
 from assistant_backend_1.features_services.voice_to_text import transcribe_audio_file
 import asyncio
 from assistant_backend_1.features_services.llm_conversation import process_user_input
 from assistant_backend_1.config import ENABLE_LLM_API
+
+# In-memory state for /done selection flow (chat_id → pending task list)
+_pending_done_tasks: dict[str, list] = {}
 
 
 async def telegram_webhook(request: Request):
@@ -45,7 +48,7 @@ async def telegram_webhook(request: Request):
     save_user(chat_id, first_name, username)
 
     # /organize command — manually trigger AI task moving for this user
-    if user_input.strip().lower() in ("/organize", "/organize@secondbrainbot"):
+    if user_input.strip().lower() in ("/organize", "/organize@secondbrainbot", "/organise", "/organise@secondbrainbot"):
         if not ENABLE_LLM_API:
             await send_message(chat_id, "⏭️ Task organizer is disabled (LLM API is off).")
             return {"status": "ok"}
@@ -65,15 +68,46 @@ async def telegram_webhook(request: Request):
             await send_message(chat_id, "❌ Task organizing failed or there was nothing to move. Check logs for details.")
         return {"status": "ok"}
 
-    # Check if the input is a digit selection for Notion active database
+    # /done command — show numbered list of pending tasks
+    if user_input.strip().lower() in ("/done", "/done@secondbrainbot", "/complete", "/complete@secondbrainbot"):
+        from assistant_backend_1.features_services.memory_journal import get_all_tasks
+        tasks = get_all_tasks(str(chat_id))
+        if not tasks:
+            await send_message(chat_id, "✅ You have no pending tasks!")
+            return {"status": "ok"}
+        _pending_done_tasks[str(chat_id)] = tasks
+        lines = "\n".join([
+            f"{i+1}. {t['title']}" + (f"  _(due {t['due'][:10]})_" if t.get("due") else "")
+            for i, t in enumerate(tasks)
+        ])
+        await send_message(chat_id, f"Which task did you complete? Reply with the number:\n\n{lines}")
+        return {"status": "ok"}
+
+    # Check if the input is a digit selection
     if user_input.strip().isdigit():
+        index = int(user_input.strip()) - 1
+
+        # /done selection takes priority over database selection
+        if str(chat_id) in _pending_done_tasks:
+            tasks = _pending_done_tasks[str(chat_id)]
+            if 0 <= index < len(tasks):
+                task = tasks[index]
+                del _pending_done_tasks[str(chat_id)]
+                from assistant_backend_1.features_services.memory_journal import mark_task_done, mark_reminder_done
+                from assistant_backend_1.features_services.notion import mark_task_done_in_notion
+                mark_task_done(str(chat_id), task["title"])
+                mark_reminder_done(str(chat_id), task["title"])
+                hook_mark_task_done(str(chat_id), task["title"])
+                await asyncio.to_thread(mark_task_done_in_notion, str(chat_id), task["title"])
+                await send_message(chat_id, f"✅ *{task['title']}* marked as done! Great work!")
+                return {"status": "ok"}
+
+        # Database digit selection
         current_users = load_users()
         user_data = current_users.get(str(chat_id), {})
         notion_data = user_data.get("notion", {})
-        # Only databases are selectable (matches what's shown in the message)
         selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
         if selectable:
-            index = int(user_input.strip()) - 1
             if 0 <= index < len(selectable):
                 selected_db = selectable[index]
                 notion_data["active_database_id"] = selected_db["id"]

@@ -156,6 +156,46 @@ def delete_reminder(chat_id: str, page_id: str) -> bool:
 
 
 # ============================================
+# OVERDUE TASK AUTO-COMPLETION
+# ============================================
+
+def mark_overdue_tasks_done():
+    """
+    Auto-marks tasks as done if their Execution Date has passed.
+    Runs alongside the reminder check on every scheduler tick.
+    """
+    from assistant_backend_1.features_services.memory_journal import get_all_tasks, mark_task_done, mark_reminder_done
+    from assistant_backend_1.models.db_hooks import hook_mark_task_done
+    from assistant_backend_1.features_services.notion import mark_task_done_in_notion
+
+    users = load_users()
+    now = datetime.now(pytz.utc)
+
+    for chat_id in users:
+        try:
+            tasks = get_all_tasks(chat_id)
+            for task in tasks:
+                due_str = task.get("due")
+                if not due_str:
+                    continue
+                try:
+                    due = datetime.fromisoformat(due_str)
+                    if due.tzinfo is None:
+                        due = pytz.timezone("Europe/Berlin").localize(due)
+                    if now >= due.astimezone(pytz.utc):
+                        title = task.get("title")
+                        mark_task_done(chat_id, title)
+                        mark_reminder_done(chat_id, title)
+                        hook_mark_task_done(chat_id, title)
+                        mark_task_done_in_notion(chat_id, title)
+                        print(f"✅ Auto-marked overdue task done: '{title}' for {chat_id}")
+                except Exception as e:
+                    print(f"❌ Error parsing due date for task '{task.get('title')}': {e}")
+        except Exception as e:
+            print(f"❌ Error auto-marking tasks for {chat_id}: {e}")
+
+
+# ============================================
 # TASK MOVING AGENT JOB
 # ============================================
 
@@ -193,10 +233,12 @@ def start_reminder_scheduler():
     print(f"🚀 Reminder scheduler starting...")
     print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min")
 
-    check_and_remind()  # run once immediately on startup
-    run_task_moving_for_all_users()  # run once immediately on startup
+    check_and_remind()
+    mark_overdue_tasks_done()
+    run_task_moving_for_all_users()
 
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_and_remind)
+    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(mark_overdue_tasks_done)
     schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
 
     while True:
