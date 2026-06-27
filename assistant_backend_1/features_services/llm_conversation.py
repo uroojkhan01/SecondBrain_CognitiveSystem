@@ -19,9 +19,6 @@ from assistant_backend_1.features_services.memory_journal import (
     update_local_task
 )
 from assistant_backend_1.features_services.notion import save_task_to_notion, delete_task_from_notion, update_task_in_notion
-from assistant_backend_1.features_services.notion_mcp import NotionAgent
-from assistant_backend_1.features_services.notion_workflow import NotionWorkflowManager
-import asyncio
 
 conversation_histories: dict[str, list] = {}
 
@@ -59,65 +56,27 @@ Example: if user says 3pm tomorrow and today is {now_berlin.strftime('%Y-%m-%d')
     return f"{CLASSIFIER_SYSTEM_PROMPT}{time_block}\n\n{context_block}"
 
 
-def log_to_notion_background(chat_id: str, text: str, intent: str, extracted_data: dict):
-    """Asynchronously logs user input to Notion capture database in the background."""
-    agent = NotionAgent()
-    workflow_manager = NotionWorkflowManager(agent)
-    
-    coro = workflow_manager.route_and_log_to_notion(
-        text=text,
-        intent=intent,
-        extracted_data=extracted_data,
-        emotion="neutral",
-        chat_id=chat_id
-    )
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(coro)
-    except RuntimeError:
-        # Fallback if no event loop is running (e.g. CLI or test)
-        asyncio.run(coro)
-
-
 def handle_brain_dump(chat_id: str, items: list):
     """Handle multiple intents extracted from a brain dump."""
     for item in items:
         intent = item.get("intent")
         if intent == "create_task" and item.get("task"):
-            save_task(
-                chat_id,
-                item["task"].get("title"),
-                item["task"].get("due")
-            )
-            log_to_notion_background(
-                chat_id,
-                item["task"].get("title"),
-                intent,
-                item["task"]
-            )
+            title = item["task"].get("title")
+            due = item["task"].get("due")
+            criticality = item["task"].get("criticality")
+            save_task(chat_id, title, due)
+            save_task_to_notion(chat_id, title, due, criticality)
         elif intent == "set_reminder" and item.get("reminder"):
             save_reminder(
                 chat_id,
                 item["reminder"].get("text"),
                 item["reminder"].get("datetime")
             )
-            log_to_notion_background(
-                chat_id,
-                item["reminder"].get("text"),
-                intent,
-                item["reminder"]
-            )
         elif intent == "save_memory" and item.get("memory_summary"):
             save_memory(
                 chat_id,
                 item["memory_summary"],
                 item.get("entities", [])
-            )
-            log_to_notion_background(
-                chat_id,
-                item.get("memory_summary"),
-                intent,
-                {"memory_summary": item.get("memory_summary"), "entities": item.get("entities", [])}
             )
 
 
@@ -136,41 +95,21 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 llm_response.memory_summary,
                 llm_response.entities
             )
-            log_to_notion_background(
-                chat_id,
-                user_input,
-                intent,
-                {"memory_summary": llm_response.memory_summary, "entities": llm_response.entities}
-            )
-    
+
     elif intent == "vent":
-        # Empathy reply but still save if there's personal content
         if llm_response.memory_summary:
             save_memory(
                 chat_id,
                 llm_response.memory_summary,
                 llm_response.entities
             )
-            log_to_notion_background(
-                chat_id,
-                user_input,
-                intent,
-                {"memory_summary": llm_response.memory_summary, "entities": llm_response.entities}
-            )
 
     elif intent == "set_reminder":
         if llm_response.reminder:
-            # Save to Neo4j locally (independent local database)
             save_reminder(
                 chat_id,
                 llm_response.reminder.get("text"),
                 llm_response.reminder.get("datetime")
-            )
-            log_to_notion_background(
-                chat_id,
-                user_input,
-                intent,
-                llm_response.reminder
             )
     elif intent == "delete_reminder":
         if llm_response.reminder:

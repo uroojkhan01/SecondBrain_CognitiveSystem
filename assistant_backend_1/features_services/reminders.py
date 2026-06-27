@@ -52,37 +52,6 @@ def send_telegram(chat_id: str, message: str):
         print(f"❌ Error sending to {chat_id}: {e}")
 
 
-def run_notion_automations_for_all_users():
-    """Trigger the async sort and synthesize loops for all users connected to Notion."""
-    import asyncio
-    users = load_users()
-    for chat_id, user_data in users.items():
-        notion_data = user_data.get("notion", {})
-        token = notion_data.get("token")
-        if token:
-            print(f"🤖 Triggering Notion automations for user {chat_id}...")
-            try:
-                from assistant_backend_1.features_services.notion_mcp import NotionAgent
-                from assistant_backend_1.features_services.notion_workflow import NotionWorkflowManager
-                agent = NotionAgent()
-                workflow = NotionWorkflowManager(agent)
-                
-                # Check active connection type
-                workflow.set_user_credentials(chat_id)
-                if getattr(agent, "active_item_type", "database") == "database":
-                    print(f"ℹ️ Active connection for user {chat_id} is a database. Skipping automations.")
-                    continue
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(workflow.run_automations(int(chat_id)))
-            except Exception as e:
-                print(f"❌ Failed to run automations for user {chat_id}: {e}")
-            finally:
-                try:
-                    loop.close()
-                except Exception:
-                    pass
 
 
 def check_and_remind():
@@ -93,12 +62,6 @@ def check_and_remind():
     """
     print(f"\n🔍 Checking local reminders at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     
-    # Trigger Notion automations
-    try:
-        run_notion_automations_for_all_users()
-    except Exception as e:
-        print(f"❌ Error running Notion automations background job: {e}")
-        
     from assistant_backend_1.features_services.memory_journal import get_due_reminders, mark_reminder_sent
     
     try:
