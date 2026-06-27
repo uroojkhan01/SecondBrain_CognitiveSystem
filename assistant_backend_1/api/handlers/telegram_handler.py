@@ -1,5 +1,6 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
+from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected, save_users
 # from assistant_backend_1.helpers import save_user, get_oauth_url, load_users, is_notion_connected
 
 # NEW
@@ -13,6 +14,8 @@ from assistant_backend_1.features_services.telegram import (
 from assistant_backend_1.features_services.voice_to_text import transcribe_audio_file
 import asyncio
 from assistant_backend_1.features_services.llm_conversation import process_user_input
+### process user input through llm model ###
+from assistant_backend_1.config import ENABLE_LLM_API
 
 
 async def telegram_webhook(request: Request):
@@ -66,13 +69,43 @@ async def telegram_webhook(request: Request):
 
     first_name = message["chat"].get("first_name")
     username = message["chat"].get("username")
-    text = message.get("text", "")
-
-    # Save user to JSON
     save_user(chat_id, first_name, username)
-    print(f"Current users: {load_users()}")
 
-    if not is_notion_connected(chat_id):
+    # Check if the input is a digit selection for Notion active database
+    if user_input.strip().isdigit():
+        current_users = load_users()
+        user_data = current_users.get(str(chat_id), {})
+        notion_data = user_data.get("notion", {})
+        # Only databases are selectable (matches what's shown in the message)
+        selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
+        if selectable:
+            index = int(user_input.strip()) - 1
+            if 0 <= index < len(selectable):
+                selected_db = selectable[index]
+                notion_data["active_database_id"] = selected_db["id"]
+                save_users(current_users)
+                await send_message(
+                    chat_id,
+                    f"✅ Active database set to: *{selected_db['name']}*"
+                )
+                return {"status": "ok"}
+
+
+    if ENABLE_LLM_API:
+        reply = process_user_input(chat_id, user_input)
+    else:
+        reply = f"[LLM API Disabled] You said: {user_input}"
+
+    current_users = load_users()
+    print(f"Current users: {current_users}")
+
+    # Check Notion credentials and attachment status
+    user_data = current_users.get(str(chat_id), {})
+    notion_data = user_data.get("notion", {})
+    token = notion_data.get("token")
+    active_database_id = notion_data.get("active_database_id")
+
+    if not token:
         oauth_url = get_oauth_url(chat_id)
         await send_message(
             chat_id,
@@ -80,8 +113,18 @@ async def telegram_webhook(request: Request):
             f"🔗 {oauth_url}"
         )
         return {"status": "ok"}
+    
+    if not active_database_id:
+        oauth_url = get_oauth_url(chat_id)
+        await send_message(
+            chat_id,
+            f"⚠️ Notion is connected, but no pages or databases are attached to the integration.\n\n"
+            f"Please click the link below to reconnect and ensure you select the pages/databases you want to share with the assistant:\n\n"
+            f"🔗 {oauth_url}"
+        )
+        return {"status": "ok"}
 
-    # Notion is connected — handle message normally
+    # Notion is connected and active — handle message normally
 
     print("sending message back to user")
     await send_message(chat_id, reply)

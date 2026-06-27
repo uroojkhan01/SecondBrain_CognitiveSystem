@@ -176,6 +176,20 @@ def mark_task_done(chat_id: str, title: str):
         )
 
 
+def mark_reminder_done(chat_id: str, text: str):
+    """Mark a matching reminder as sent/done in Neo4j."""
+    with get_session() as session:
+        session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
+            WHERE (r.is_sent = false OR r.is_sent IS NULL) AND toLower(r.text) CONTAINS toLower($text)
+            SET r.is_sent = true, r.completed_at = datetime()
+            """,
+            chat_id=chat_id,
+            text=text
+        )
+
+
 def update_entity(chat_id: str, entities: list):
     """Update existing named entity nodes."""
     with get_session() as session:
@@ -264,6 +278,7 @@ def get_user_context(chat_id: str) -> str:
         reminders = session.run(
             """
             MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
+            WHERE r.is_sent = false OR r.is_sent IS NULL
             RETURN r.text as text, r.remind_at as remind_at
             ORDER BY r.created_at DESC
             LIMIT 5
@@ -299,3 +314,172 @@ def get_user_context(chat_id: str) -> str:
             return "No previous information about this user yet."
 
         return "\n".join(lines)
+
+
+# =====================================================================
+# NEO4J LOCAL REMINDER HELPERS
+# =====================================================================
+
+def get_due_reminders() -> list:
+    """Fetch all reminders that have not been sent yet."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User)-[:SET]->(r:Reminder {is_sent: false})
+            RETURN u.chat_id as chat_id, elementId(r) as node_id, r.text as text, r.remind_at as remind_at
+            """
+        )
+        return [dict(record) for record in result]
+
+
+def mark_reminder_sent(node_id: str):
+    """Mark a reminder as sent in Neo4j."""
+    with get_session() as session:
+        session.run(
+            """
+            MATCH (r:Reminder)
+            WHERE elementId(r) = $node_id
+            SET r.is_sent = true, r.sent_at = datetime()
+            """,
+            node_id=node_id
+        )
+
+
+def get_local_reminders(chat_id: str) -> list:
+    """Read all reminders from Neo4j for this user."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
+            RETURN elementId(r) as id, r.text as name, r.remind_at as due_datetime, r.is_sent as is_sent
+            ORDER BY r.remind_at ASC
+            """,
+            chat_id=chat_id
+        )
+        # Adapt format for reminders.py compatibility
+        reminders = []
+        for record in result:
+            due_str = record["due_datetime"]
+            due_datetime = None
+            has_time = False
+            if due_str:
+                try:
+                    if "T" in due_str:
+                        from datetime import datetime
+                        due_datetime = datetime.fromisoformat(due_str)
+                        has_time = True
+                    else:
+                        from datetime import datetime
+                        due_datetime = datetime.strptime(due_str, "%Y-%m-%d")
+                        has_time = False
+                except Exception:
+                    due_datetime = due_str
+            reminders.append({
+                "id": record["id"],
+                "name": record["name"],
+                "due_datetime": due_datetime,
+                "has_time": has_time,
+                "is_sent": record["is_sent"]
+            })
+        return reminders
+
+
+def update_local_reminder(chat_id: str, node_id: str, text: str = None, remind_at: str = None) -> bool:
+    """Update text and/or remind_at for an existing local reminder."""
+    with get_session() as session:
+        # Build query dynamic properties update
+        sets = []
+        params = {"node_id": node_id, "chat_id": chat_id}
+        if text is not None:
+            sets.append("r.text = $text")
+            params["text"] = text
+        if remind_at is not None:
+            sets.append("r.remind_at = $remind_at")
+            params["remind_at"] = remind_at
+            
+        if not sets:
+            return True
+            
+        query = f"""
+        MATCH (u:User {{chat_id: $chat_id}})-[:SET]->(r:Reminder)
+        WHERE elementId(r) = $node_id
+        SET {', '.join(sets)}
+        RETURN elementId(r) as node_id
+        """
+        result = session.run(query, **params)
+        return result.single() is not None
+
+
+def delete_local_reminder(chat_id: str, node_id: str) -> bool:
+    """Delete a reminder from Neo4j."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
+            WHERE elementId(r) = $node_id
+            DETACH DELETE r
+            RETURN count(r) as deleted_count
+            """,
+            chat_id=chat_id,
+            node_id=node_id
+        )
+        record = result.single()
+        return record is not None and record["deleted_count"] > 0
+
+
+def get_all_tasks(chat_id: str) -> list:
+    """Read all pending tasks from Neo4j for this user."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task)
+            WHERE t.status = 'pending'
+            RETURN elementId(t) as id, t.title as title, t.due as due
+            ORDER BY t.created_at ASC
+            """,
+            chat_id=chat_id
+        )
+        return [{"id": r["id"], "title": r["title"], "due": r["due"]} for r in result]
+
+
+def update_local_task(chat_id: str, node_id: str, title: str = None, due: str = None) -> bool:
+    """Update title and/or due date for an existing task."""
+    with get_session() as session:
+        sets = []
+        params = {"node_id": node_id, "chat_id": chat_id}
+        if title is not None:
+            sets.append("t.title = $title")
+            params["title"] = title
+        if due is not None:
+            sets.append("t.due = $due")
+            params["due"] = due
+
+        if not sets:
+            return True
+
+        query = f"""
+        MATCH (u:User {{chat_id: $chat_id}})-[:CREATED]->(t:Task)
+        WHERE elementId(t) = $node_id
+        SET {', '.join(sets)}
+        RETURN elementId(t) as node_id
+        """
+        result = session.run(query, **params)
+        return result.single() is not None
+
+
+def delete_local_task(chat_id: str, node_id: str) -> bool:
+    """Delete a task from Neo4j."""
+    with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task)
+            WHERE elementId(t) = $node_id
+            DETACH DELETE t
+            RETURN count(t) as deleted_count
+            """,
+            chat_id=chat_id,
+            node_id=node_id
+        )
+        record = result.single()
+        return record is not None and record["deleted_count"] > 0
+

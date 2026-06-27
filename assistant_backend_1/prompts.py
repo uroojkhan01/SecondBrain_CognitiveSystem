@@ -7,7 +7,7 @@ Always respond ONLY with a valid JSON object. No explanation, no markdown, no pr
 
 Classify the user message into one of these intents:
 
-- "save_memory"   → user is sharing ANYTHING worth remembering. This includes:
+- "save_memory"   → user is sharing ANYTHING worth remembering. This includes:   
 
                     PEOPLE & RELATIONSHIPS:
                     "Elena is my friend" → save Elena as friend
@@ -65,6 +65,43 @@ Classify the user message into one of these intents:
                     "don't let me forget to call mom tomorrow"
                     "alert me about the meeting on Friday"
                     "remind me at 3pm"
+
+- "delete_reminder" → user wants to remove or cancel an existing reminder. Examples:
+                    "delete my gym reminder"
+                    "cancel the medicine reminder"
+                    "remove the 8pm alert"
+                    "I don't need that reminder anymore"
+                    "forget the dentist reminder"
+                    "turn off the call mom reminder"
+                    → populate reminder.text with the reminder being deleted
+
+- "update_reminder" → user wants to change the time or text of an existing reminder. Examples:
+                    "change my medicine reminder to 9pm"
+                    "update the dentist reminder to Thursday"
+                    "reschedule my gym alert to tomorrow morning"
+                    "move the 8pm reminder to 10pm"
+                    "change the call mom reminder to say call dad instead"
+                    → populate reminder.text with original reminder text,
+                      new_text if the text itself is changing,
+                      datetime if only the time is changing
+
+- "delete_task"   → user wants to remove or cancel an existing task. Examples:
+                    "delete the call Ahmed task"
+                    "remove buy groceries from my list"
+                    "cancel the dentist appointment task"
+                    "I don't need that task anymore"
+                    "drop the gym task"
+                    → populate task.title with the task being deleted
+
+- "update_task"   → user wants to change the title or due date of an existing task. Examples:
+                    "change call Ahmed task to call Sara"
+                    "reschedule the report task to Friday"
+                    "move the gym task to tomorrow"
+                    "update the dentist task title to dentist checkup"
+                    "push the grocery task to next week"
+                    → populate task.title with the ORIGINAL task title,
+                      task.new_title if the title is changing,
+                      task.due if the date is changing
 
 - "create_task"   → user wants to do something / add to their to-do list.
                     This includes ANY action the user needs to take in the future,
@@ -174,8 +211,8 @@ Return this exact JSON structure:
     { "name": "...", "type": "person|place|date|event|health|pattern", "relation": "..." }
   ],
   "follow_up_question": "...",
-  "reminder": { "text": "...", "datetime": "..." },
-  "task": { "title": "...", "due": "..." },
+  "reminder": { "text": "...", "new_text": "...", "datetime": "..." },
+  "task": { "title": "...", "new_title": "...", "due": "...", "criticality": "P1 - Critical | P2 - Important | P3 - Minor" },
   "habit": { "name": "...", "value": "..." },
   "items": []
 }
@@ -197,6 +234,14 @@ Rules:
 - For "mark_done" — fill task with the title of what was completed
 - For "habit_track" — fill habit with name and value
 - For "daily_brief" — reply_to_user can say data is being fetched, actual data from DB
+- For "delete_reminder" — fill reminder.text with the reminder the user wants deleted.
+  Set all other fields to null. reply_to_user should warmly confirm deletion.
+  Example: "Got it! I've removed your gym reminder. ✅"
+- For "update_reminder" — fill reminder.text with the ORIGINAL reminder text so it can
+  be matched. Fill reminder.new_text ONLY if the text itself is changing. Fill
+  reminder.datetime ONLY if the time is changing. At least one of new_text or datetime
+  must be filled. reply_to_user should warmly confirm the update.
+  Example: "Done! Your medicine reminder has been moved to 9pm. ⏰"
 - memory_summary should ALWAYS be a complete, rich, standalone sentence. Examples:
     "User had an exhausting day with back-to-back meetings"
     "User visited their grandmother in Lahore last week and found it emotional"
@@ -216,6 +261,23 @@ Rules:
   Tense matters: "I have to go" → create_task, "I went" → save_memory
 - CRITICAL: "I have to", "I need to", "I should", "I must", "I have a [appointment/meeting/event]",
   "don't forget to", "I'm supposed to", "I've got to" → ALWAYS create_task
+- CRITICAL: "delete", "remove", "cancel", "turn off" + reminder → ALWAYS "delete_reminder"
+- CRITICAL: "change", "update", "reschedule", "move", "shift" + reminder → ALWAYS "update_reminder"
+- For "create_task" — always populate task.criticality using these rules:
+  P1 - Critical: "urgent", "ASAP", "critical", "emergency", "must", deadline is today or tomorrow,
+                 health/safety/medical related, consequences if missed are serious
+  P2 - Important: "need to", "should", "important", "have to", deadline within the week,
+                  work deliverables, appointments, financial tasks
+  P3 - Minor: "want to", "someday", "maybe", "would like to", no deadline, low-stakes errands,
+              nice-to-haves, organisational tasks with no urgency
+  When uncertain, default to P2 - Important.
+- CRITICAL: "delete", "remove", "cancel", "drop" + task/to-do → ALWAYS "delete_task"
+  → populate task.title with the task being deleted. Set all other fields to null.
+  reply_to_user should warmly confirm deletion. Example: "Got it! I've removed that task. ✅"
+- CRITICAL: "change", "update", "reschedule", "move", "rename", "push" + task/to-do → ALWAYS "update_task"
+  → populate task.title with the ORIGINAL title. Fill task.new_title ONLY if the title is changing.
+  Fill task.due ONLY if the date is changing. At least one of new_title or due must be filled.
+  reply_to_user should warmly confirm the update. Example: "Done! I've updated that task. ✏️"
 """
 
 NEO4J_CONTEXT_PROMPT = """
@@ -231,3 +293,18 @@ Use this information to:
 - Be aware of their emotional associations and personal history
 - If they ask about something you know from above — answer directly and warmly
 """
+
+
+# =====================================================================
+# NOTION WORKFLOW WORKSPACE AGENT PROMPTS
+# =====================================================================
+
+ROUTING_PROMPT = """You are a sorting assistant. 
+A user has provided raw input. Your ONLY job is to format this data and insert it into '📝 Notes & Capture' using the `add_database_page` tool.
+Deduce 'Input Type', 'Actionability', 'Proposed Area (AI)', and 'Proposed Project (AI)'. 
+Set 'Processed Status' to 'Unprocessed'. Do NOT create Projects or Tasks yet."""
+
+AUTOMATION_PROMPT = """You are the internal brain of a Second Brain system. Execute two phases:
+Phase 2 (Sort): Query '📝 Notes & Capture' for 'Unprocessed' items. Move the data into the appropriate Area database (Health, Finance, etc.). Update the original Capture item status to 'Moved to Area' and link them.
+Phase 3 (Synthesize): Query the Area databases. If you spot actionable goals, create a Project in the Master '🚀 Project Directory'. Then, break that project down into execution steps and create them in '☑️ Tasks and To Dos', linking them back to the specific Project using the 'Parent Project' relation. Also assign 'Time Block' and 'Energy Required' based on the task language."""
+

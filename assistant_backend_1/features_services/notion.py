@@ -169,22 +169,19 @@ def format_due_date_for_notion(due_str: str, token: str = None, database_id: str
         print(f"❌ Error formatting date: {e}")
         return None
 
-def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
+def save_task_to_notion(chat_id: str, title: str, due: str = None, criticality: str = None) -> bool:
     token, database_id = get_user_notion_credentials(chat_id)
 
     if not token or not database_id:
         print(f"⚠️ No Notion credentials for {chat_id}")
         return False
 
-    # ← Get schema to find correct column names
     schema = get_active_database_schema(chat_id)
     print(f"📋 Using schema: {schema}")
 
-    # Find correct column names from schema
-    title_col = get_column_name(schema, "title") or "Task name"
-    date_col = get_column_name(schema, "date") or "Due date"
-    status_col = get_column_name(schema, "status") or None
-    checkbox_col = get_column_name(schema, "checkbox") or None
+    title_col = get_column_name(schema, "title") or "Task Name"
+    date_col = get_column_name(schema, "date") or "Execution Date"
+    criticality_col = get_column_name(schema, "select") or "Criticality"
 
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -193,25 +190,19 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         "Notion-Version": "2022-06-28"
     }
 
-    # Build props dynamically
     props = {
         title_col: {
             "title": [{"text": {"content": str(title)}}]
         }
     }
 
-    # Add status if column exists
-    if status_col:
-        props[status_col] = {"status": {"name": "Not started"}}
-
-    # Add checkbox if exists and no status
-    elif checkbox_col:
-        props[checkbox_col] = {"checkbox": False}
-
-    # Add due date
     formatted_due = format_due_date_for_notion(due, token, database_id)
     if formatted_due and date_col:
         props[date_col] = {"date": {"start": formatted_due}}
+
+    valid_criticalities = {"P1 - Critical", "P2 - Important", "P3 - Minor"}
+    if criticality in valid_criticalities and criticality_col:
+        props[criticality_col] = {"select": {"name": criticality}}
 
     try:
         response = requests.post(
@@ -224,7 +215,7 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
         )
 
         if response.status_code == 200:
-            print(f"✅ Task saved to Notion: {title}")
+            print(f"✅ Task saved to Notion: {title} [{criticality}]")
             return True
         else:
             print(f"❌ Notion error: {response.text}")
@@ -232,6 +223,117 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
 
     except Exception as e:
         print(f"❌ Error saving to Notion: {e}")
+        return False
+
+
+def find_task_in_notion(chat_id: str, title: str) -> str | None:
+    """Search the active tasks database for a page matching title. Returns page_id or None."""
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token or not database_id:
+        return None
+
+    schema = get_active_database_schema(chat_id)
+    title_col = get_column_name(schema, "title") or "Task Name"
+
+    try:
+        response = requests.post(
+            f"https://api.notion.com/v1/databases/{database_id}/query",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={
+                "filter": {
+                    "property": title_col,
+                    "title": {"contains": title}
+                }
+            }
+        )
+        results = response.json().get("results", [])
+        if results:
+            return results[0]["id"]
+    except Exception as e:
+        print(f"❌ Error finding task in Notion: {e}")
+    return None
+
+
+def delete_task_from_notion(chat_id: str, title: str) -> bool:
+    """Archive (soft-delete) a matching task page in Notion."""
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Task not found in Notion: {title}")
+        return False
+
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"archived": True}
+        )
+        if response.status_code == 200:
+            print(f"✅ Task archived in Notion: {title}")
+            return True
+        else:
+            print(f"❌ Notion archive error: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Error deleting task from Notion: {e}")
+        return False
+
+
+def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_due: str = None) -> bool:
+    """Update title and/or due date of a matching task page in Notion."""
+    token, database_id = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+
+    page_id = find_task_in_notion(chat_id, title)
+    if not page_id:
+        print(f"⚠️ Task not found in Notion: {title}")
+        return False
+
+    schema = get_active_database_schema(chat_id)
+    title_col = get_column_name(schema, "title") or "Task Name"
+    date_col = get_column_name(schema, "date") or "Execution Date"
+
+    props = {}
+    if new_title:
+        props[title_col] = {"title": [{"text": {"content": str(new_title)}}]}
+    if new_due:
+        formatted_due = format_due_date_for_notion(new_due, token, database_id)
+        if formatted_due:
+            props[date_col] = {"date": {"start": formatted_due}}
+
+    if not props:
+        return True
+
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": props}
+        )
+        if response.status_code == 200:
+            print(f"✅ Task updated in Notion: {title}")
+            return True
+        else:
+            print(f"❌ Notion update error: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Error updating task in Notion: {e}")
         return False
 
 
