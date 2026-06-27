@@ -269,6 +269,9 @@ def save_reminder(
     task_id: str = None,
     neo4j_node_id: str = None
 ) -> dict:
+    # Parse ISO string to datetime so SQLAlchemy/psycopg gets the right type
+    if isinstance(remind_at, str):
+        remind_at = datetime.fromisoformat(remind_at)
     with get_session() as session:
         reminder = Reminder(
             user_id=user_id,

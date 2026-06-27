@@ -107,13 +107,15 @@ def hook_save_task(
         user = get_user_by_chat_id(chat_id)
         if not user:
             return None
-        return save_task(
+        result = save_task(
             user_id=user["id"],
             title=title,
             message_id=message_id,
             due_date=due_date,
             neo4j_node_id=neo4j_node_id
         )
+        print(f"[DB] ✅ Task saved to Postgres: '{title}' for {chat_id}")
+        return result
     except Exception as e:
         print(f"[DB] Failed to save task for {chat_id}: {e}")
         return None
@@ -182,13 +184,15 @@ def hook_save_reminder(
         user = get_user_by_chat_id(chat_id)
         if not user:
             return None
-        return save_reminder(
+        result = save_reminder(
             user_id=user["id"],
             text=text,
             remind_at=remind_at,
             message_id=message_id,
             neo4j_node_id=neo4j_node_id
         )
+        print(f"[DB] ✅ Reminder saved to Postgres: '{text}' for {chat_id}")
+        return result
     except Exception as e:
         print(f"[DB] Failed to save reminder for {chat_id}: {e}")
         return None

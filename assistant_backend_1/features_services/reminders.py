@@ -21,7 +21,7 @@ import schedule
 # ============================================
 USERS_FILE = "user.json"
 CHECK_INTERVAL_MINUTES = 5
-TASK_MOVING_INTERVAL_MINUTES = 30
+TASK_MOVING_INTERVAL_MINUTES = 5
 
 # ============================================
 # HELPERS
