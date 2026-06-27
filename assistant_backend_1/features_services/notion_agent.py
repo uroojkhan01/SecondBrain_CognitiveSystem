@@ -4,16 +4,16 @@ from assistant_backend_1.helpers import load_users, save_users
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
+# Area databases: (display name, emoji, flat-schema key)
 AREA_DATABASES = [
-    "Health & Fitness",
-    "Finance & Wealth",
-    "Career & Professional",
-    "Personal Growth & Learning",
-    "Home & Lifestyle",
+    ("Health & Fitness",           "💪"),
+    ("Finance & Wealth",           "💰"),
+    ("Career & Professional",      "💼"),
+    ("Personal Growth & Learning", "🌱"),
+    ("Home & Lifestyle",           "🏠"),
 ]
 
-# Flat schema format (column_name → type string) — matches what fetch_database_schema produces
-# and what the rest of the system reads via get_active_database_schema / get_column_name.
+# Flat schema format (column_name → type string) used by get_active_database_schema / get_column_name
 AREA_DB_FLAT_SCHEMA = {
     "Name": "title",
     "Date Logged": "date",
@@ -34,7 +34,7 @@ TASKS_FLAT_SCHEMA = {
     "Parent Project": "relation",
 }
 
-# Full Notion API property definitions used when creating databases
+# Full Notion API property definitions
 AREA_DB_PROPERTIES = {
     "Name": {"title": {}},
     "Date Logged": {"date": {}},
@@ -46,9 +46,9 @@ MASTER_PROJECTS_PROPERTIES = {
     "Status": {
         "select": {
             "options": [
-                {"name": "Proposed", "color": "gray"},
-                {"name": "Active", "color": "green"},
-                {"name": "Paused", "color": "yellow"},
+                {"name": "Proposed",  "color": "gray"},
+                {"name": "Active",    "color": "green"},
+                {"name": "Paused",    "color": "yellow"},
                 {"name": "Completed", "color": "blue"},
             ]
         }
@@ -66,33 +66,56 @@ def _headers(token: str) -> dict:
     }
 
 
-def _create_page(token: str) -> str:
-    """Create the top-level 'Second Brain' page in the workspace."""
+def _create_root_page(token: str, title: str, emoji: str) -> str:
+    """Create a top-level page in the workspace."""
     response = requests.post(
         f"{NOTION_API}/pages",
         headers=_headers(token),
         json={
             "parent": {"type": "workspace", "workspace": True},
+            "icon": {"type": "emoji", "emoji": emoji},
             "properties": {
                 "title": {
-                    "title": [{"type": "text", "text": {"content": "Second Brain"}}]
+                    "title": [{"type": "text", "text": {"content": title}}]
                 }
             },
         },
     )
     data = response.json()
     if response.status_code != 200:
-        raise Exception(f"Failed to create Second Brain page: {data}")
+        raise Exception(f"Failed to create root page '{title}': {data}")
     return data["id"]
 
 
-def _create_database(token: str, page_id: str, title: str, properties: dict) -> str:
-    """Create a database as a child of page_id. Returns the new database id."""
+def _create_child_page(token: str, parent_page_id: str, title: str, emoji: str) -> str:
+    """Create a sub-page under an existing page."""
+    response = requests.post(
+        f"{NOTION_API}/pages",
+        headers=_headers(token),
+        json={
+            "parent": {"type": "page_id", "page_id": parent_page_id},
+            "icon": {"type": "emoji", "emoji": emoji},
+            "properties": {
+                "title": {
+                    "title": [{"type": "text", "text": {"content": title}}]
+                }
+            },
+        },
+    )
+    data = response.json()
+    if response.status_code != 200:
+        raise Exception(f"Failed to create child page '{title}': {data}")
+    return data["id"]
+
+
+def _create_database(token: str, parent_page_id: str, title: str, emoji: str, properties: dict) -> str:
+    """Create a database under a page."""
     response = requests.post(
         f"{NOTION_API}/databases",
         headers=_headers(token),
         json={
-            "parent": {"type": "page_id", "page_id": page_id},
+            "parent": {"type": "page_id", "page_id": parent_page_id},
+            "icon": {"type": "emoji", "emoji": emoji},
             "title": [{"type": "text", "text": {"content": title}}],
             "properties": properties,
         },
@@ -110,34 +133,48 @@ def _area_key(name: str) -> str:
 
 def setup_second_brain(chat_id: str, token: str) -> bool:
     """
-    Creates the Second Brain page and 7 databases beneath it.
+    Creates the full Second Brain structure in Notion:
 
-    On success:
-      - user.json["notion"]["database_ids"]   → replaced with the 7 Second Brain databases
-      - user.json["notion"]["active_database_id"] → Tasks & To Dos
-      - user.json["second_brain"]             → page_id + keyed db ids
+      🧠 Second Brain  (workspace root page)
+      ├── 🗂️ Areas Boards  (sub-page)
+      │   ├── 💪 Health & Fitness        (database)
+      │   ├── 💰 Finance & Wealth        (database)
+      │   ├── 💼 Career & Professional   (database)
+      │   ├── 🌱 Personal Growth & Learning (database)
+      │   └── 🏠 Home & Lifestyle        (database)
+      ├── 🚀 Project Directory  (sub-page)
+      │   └── 📋 Master Projects DB      (database)
+      └── ✅ Tasks and To Dos            (database)
+
+    On success appends all 7 databases to notion.database_ids, sets
+    active_database_id → Tasks & To Dos, and writes second_brain block.
 
     Returns True on success, False on failure.
     """
     print(f"🧠 Setting up Second Brain for user {chat_id}...")
 
-    # 1. Top-level page
+    # ── 1. Root page ─────────────────────────────────────────────────
     try:
-        page_id = _create_page(token)
-        print(f"✅ Second Brain page: {page_id}")
+        root_id = _create_root_page(token, "Second Brain", "🧠")
+        print(f"✅ Second Brain page: {root_id}")
     except Exception as e:
-        print(f"❌ Could not create Second Brain page: {e}")
+        print(f"❌ {e}")
         return False
 
-    # Will hold {"key": db_id} for second_brain block
     keyed_db_ids = {}
-    # Will hold the database_ids list in the format the rest of the system expects
     database_list = []
 
-    # 2. Five area databases
-    for area_name in AREA_DATABASES:
+    # ── 2. Areas Boards sub-page + 5 area databases ───────────────────
+    try:
+        areas_page_id = _create_child_page(token, root_id, "Areas Boards", "🗂️")
+        print(f"✅ Areas Boards page: {areas_page_id}")
+    except Exception as e:
+        print(f"❌ {e}")
+        return False
+
+    for area_name, emoji in AREA_DATABASES:
         try:
-            db_id = _create_database(token, page_id, area_name, AREA_DB_PROPERTIES)
+            db_id = _create_database(token, areas_page_id, area_name, emoji, AREA_DB_PROPERTIES)
             keyed_db_ids[_area_key(area_name)] = db_id
             database_list.append({
                 "id": db_id,
@@ -147,12 +184,21 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
             })
             print(f"✅ Area DB '{area_name}': {db_id}")
         except Exception as e:
-            print(f"❌ Failed to create area DB '{area_name}': {e}")
+            print(f"❌ {e}")
             return False
 
-    # 3. Master Projects DB
+    # ── 3. Project Directory sub-page + Master Projects DB ───────────
     try:
-        master_id = _create_database(token, page_id, "Master Projects DB", MASTER_PROJECTS_PROPERTIES)
+        projects_page_id = _create_child_page(token, root_id, "Project Directory", "🚀")
+        print(f"✅ Project Directory page: {projects_page_id}")
+    except Exception as e:
+        print(f"❌ {e}")
+        return False
+
+    try:
+        master_id = _create_database(
+            token, projects_page_id, "Master Projects DB", "📋", MASTER_PROJECTS_PROPERTIES
+        )
         keyed_db_ids["master_projects"] = master_id
         database_list.append({
             "id": master_id,
@@ -162,55 +208,58 @@ def setup_second_brain(chat_id: str, token: str) -> bool:
         })
         print(f"✅ Master Projects DB: {master_id}")
     except Exception as e:
-        print(f"❌ Failed to create Master Projects DB: {e}")
+        print(f"❌ {e}")
         return False
 
-    # 4. Tasks & To Dos — relation to Master Projects DB
+    # ── 4. Tasks & To Dos (directly under root, relation → Master Projects) ──
     tasks_properties = {
         "Task Name": {"title": {}},
         "Execution Date": {"date": {}},
         "Criticality": {
             "select": {
                 "options": [
-                    {"name": "P1 - Critical", "color": "red"},
+                    {"name": "P1 - Critical",  "color": "red"},
                     {"name": "P2 - Important", "color": "yellow"},
-                    {"name": "P3 - Minor", "color": "blue"},
+                    {"name": "P3 - Minor",     "color": "blue"},
                 ]
             }
         },
         "Parent Project": {
-            "relation": {"database_id": master_id}
+            "relation": {
+                "database_id": master_id,
+                "type": "single_property",
+                "single_property": {},
+            }
         },
     }
     try:
-        tasks_id = _create_database(token, page_id, "☑️ Tasks and To Dos", tasks_properties)
+        tasks_id = _create_database(token, root_id, "Tasks and To Dos", "✅", tasks_properties)
         keyed_db_ids["tasks_todos"] = tasks_id
         database_list.append({
             "id": tasks_id,
-            "name": "☑️ Tasks and To Dos",
+            "name": "Tasks and To Dos",
             "type": "database",
             "schema": TASKS_FLAT_SCHEMA,
         })
         print(f"✅ Tasks & To Dos DB: {tasks_id}")
     except Exception as e:
-        print(f"❌ Failed to create Tasks DB: {e}")
+        print(f"❌ {e}")
         return False
 
-    # 5. Write everything to user.json in one shot
+    # ── 5. Update user.json ──────────────────────────────────────────
     users = load_users()
     users.setdefault(str(chat_id), {})
 
-    # Append Second Brain databases to the OAuth-discovered list
     existing = users[str(chat_id)]["notion"].get("database_ids", [])
     users[str(chat_id)]["notion"]["database_ids"] = existing + database_list
     users[str(chat_id)]["notion"]["active_database_id"] = tasks_id
-
-    # Store keyed ids + page for easy lookup
     users[str(chat_id)]["second_brain"] = {
-        "page_id": page_id,
+        "page_id": root_id,
+        "areas_page_id": areas_page_id,
+        "projects_page_id": projects_page_id,
         "databases": keyed_db_ids,
     }
 
     save_users(users)
-    print(f"🎉 Second Brain setup complete and saved for {chat_id}")
+    print(f"🎉 Second Brain setup complete for {chat_id}")
     return True
