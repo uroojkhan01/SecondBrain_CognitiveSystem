@@ -15,6 +15,7 @@ from assistant_backend_1.models.db import (
 )
 from assistant_backend_1.models.database import Task
 from assistant_backend_1.models.db import get_session
+import uuid
 
 
 # ─── User ─────────────────────────────────────────────────────────
@@ -123,11 +124,12 @@ def hook_mark_task_done(chat_id: str, title: str) -> None:
         user = get_user_by_chat_id(chat_id)
         if not user:
             return
+        user_uuid = uuid.UUID(user["id"])
         with get_session() as session:
             task = (
                 session.query(Task)
                 .filter(
-                    Task.user_id == user["id"],
+                    Task.user_id == user_uuid,
                     Task.title.ilike(f"%{title}%"),
                     Task.status == "pending"
                 )
@@ -136,6 +138,8 @@ def hook_mark_task_done(chat_id: str, title: str) -> None:
             if task:
                 task.status = "done"
                 session.commit()
+            else:
+                print(f"[DB] No pending task matching '{title}' for {chat_id}")
     except Exception as e:
         print(f"[DB] Failed to mark task done for {chat_id}: {e}")
 
@@ -145,11 +149,12 @@ def hook_cancel_task(chat_id: str, title: str) -> None:
         user = get_user_by_chat_id(chat_id)
         if not user:
             return
+        user_uuid = uuid.UUID(user["id"])
         with get_session() as session:
             task = (
                 session.query(Task)
                 .filter(
-                    Task.user_id == user["id"],
+                    Task.user_id == user_uuid,
                     Task.title.ilike(f"%{title}%"),
                     Task.status == "pending"
                 )
@@ -158,6 +163,8 @@ def hook_cancel_task(chat_id: str, title: str) -> None:
             if task:
                 task.status = "cancelled"
                 session.commit()
+            else:
+                print(f"[DB] No pending task matching '{title}' for {chat_id}")
     except Exception as e:
         print(f"[DB] Failed to cancel task for {chat_id}: {e}")
 

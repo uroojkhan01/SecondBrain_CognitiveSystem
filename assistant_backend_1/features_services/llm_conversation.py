@@ -18,9 +18,10 @@ from assistant_backend_1.features_services.memory_journal import (
     delete_local_task,
     update_local_task
 )
-from assistant_backend_1.features_services.notion import save_task_to_notion, delete_task_from_notion, update_task_in_notion
 from assistant_backend_1.features_services.notion import (
     save_task_to_notion,
+    delete_task_from_notion,
+    update_task_in_notion,
     save_reminder_to_notion
 )
 
@@ -156,13 +157,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             # Fetch all reminders and find matching one
             all_reminders = get_all_reminders(chat_id)
             matched = next(
-                (r for r in all_reminders 
-                 if reminder_text.lower() in r["name"].lower() 
+                (r for r in all_reminders
+                 if reminder_text.lower() in r["name"].lower()
                  or r["name"].lower() in reminder_text.lower()),
                 None
-            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
-
             )
+            hook_save_reminder(chat_id, llm_response.reminder.get("text"), remind_at=llm_response.reminder.get("datetime"))
             
             if matched:
                 success = update_reminder(
@@ -211,8 +211,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                  if task_title.lower() in t["title"].lower()
                  or t["title"].lower() in task_title.lower()),
                 None
-            hook_save_task(chat_id, llm_response.task.get("title"), due_date=llm_response.task.get("due"))
             )
+            hook_save_task(chat_id, llm_response.task.get("title"), due_date=llm_response.task.get("due"))
             if matched:
                 success = update_local_task(chat_id, matched["id"], title=new_title, due=new_due)
                 print(f"{'✅' if success else '❌'} Update task (Neo4j): {task_title}")
