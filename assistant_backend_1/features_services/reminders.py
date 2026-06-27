@@ -199,6 +199,20 @@ def mark_overdue_tasks_done():
 # TASK MOVING AGENT JOB
 # ============================================
 
+def sync_progress_bars_for_all_users():
+    """Recalculate Progress Bar for every project for every user every 10 minutes."""
+    from assistant_backend_1.features_services.notion import sync_all_project_progress
+    users = load_users()
+    for chat_id, user_data in users.items():
+        second_brain = user_data.get("second_brain", {})
+        if not second_brain.get("databases", {}).get("master_projects"):
+            continue
+        try:
+            sync_all_project_progress(chat_id)
+        except Exception as e:
+            print(f"❌ Progress sync failed for {chat_id}: {e}")
+
+
 def run_task_moving_for_all_users():
     """
     Runs the AI task-moving agent for every user who has a Second Brain set up.
@@ -231,15 +245,17 @@ def run_task_moving_for_all_users():
 def start_reminder_scheduler():
     """Call this from app.py / lifespan to start scheduler in background."""
     print(f"🚀 Reminder scheduler starting...")
-    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Overdue check: twice daily | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min")
+    print(f"⏱ Reminders: every {CHECK_INTERVAL_MINUTES} min | Overdue check: twice daily | Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min | Progress sync: every 10 min")
 
     check_and_remind()
     mark_overdue_tasks_done()
     run_task_moving_for_all_users()
+    sync_progress_bars_for_all_users()
 
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_and_remind)
     schedule.every(12).hours.do(mark_overdue_tasks_done)
     schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
+    schedule.every(10).minutes.do(sync_progress_bars_for_all_users)
 
     while True:
         schedule.run_pending()
