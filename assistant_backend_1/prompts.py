@@ -85,6 +85,24 @@ Classify the user message into one of these intents:
                       new_text if the text itself is changing,
                       datetime if only the time is changing
 
+- "delete_task"   → user wants to remove or cancel an existing task. Examples:
+                    "delete the call Ahmed task"
+                    "remove buy groceries from my list"
+                    "cancel the dentist appointment task"
+                    "I don't need that task anymore"
+                    "drop the gym task"
+                    → populate task.title with the task being deleted
+
+- "update_task"   → user wants to change the title or due date of an existing task. Examples:
+                    "change call Ahmed task to call Sara"
+                    "reschedule the report task to Friday"
+                    "move the gym task to tomorrow"
+                    "update the dentist task title to dentist checkup"
+                    "push the grocery task to next week"
+                    → populate task.title with the ORIGINAL task title,
+                      task.new_title if the title is changing,
+                      task.due if the date is changing
+
 - "create_task"   → user wants to do something / add to their to-do list.
                     This includes ANY action the user needs to take in the future,
                     even if not explicitly saying "create task" or "add to list".
@@ -194,7 +212,7 @@ Return this exact JSON structure:
   ],
   "follow_up_question": "...",
   "reminder": { "text": "...", "new_text": "...", "datetime": "..." },
-  "task": { "title": "...", "due": "..." },
+  "task": { "title": "...", "new_title": "...", "due": "..." },
   "habit": { "name": "...", "value": "..." },
   "items": []
 }
@@ -245,6 +263,13 @@ Rules:
   "don't forget to", "I'm supposed to", "I've got to" → ALWAYS create_task
 - CRITICAL: "delete", "remove", "cancel", "turn off" + reminder → ALWAYS "delete_reminder"
 - CRITICAL: "change", "update", "reschedule", "move", "shift" + reminder → ALWAYS "update_reminder"
+- CRITICAL: "delete", "remove", "cancel", "drop" + task/to-do → ALWAYS "delete_task"
+  → populate task.title with the task being deleted. Set all other fields to null.
+  reply_to_user should warmly confirm deletion. Example: "Got it! I've removed that task. ✅"
+- CRITICAL: "change", "update", "reschedule", "move", "rename", "push" + task/to-do → ALWAYS "update_task"
+  → populate task.title with the ORIGINAL title. Fill task.new_title ONLY if the title is changing.
+  Fill task.due ONLY if the date is changing. At least one of new_title or due must be filled.
+  reply_to_user should warmly confirm the update. Example: "Done! I've updated that task. ✏️"
 """
 
 NEO4J_CONTEXT_PROMPT = """
