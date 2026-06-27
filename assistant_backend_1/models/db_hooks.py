@@ -15,6 +15,7 @@ from assistant_backend_1.models.db import (
 )
 from assistant_backend_1.models.database import Task
 from assistant_backend_1.models.db import get_session
+import uuid
 
 
 # ─── User ─────────────────────────────────────────────────────────
@@ -106,13 +107,15 @@ def hook_save_task(
         user = get_user_by_chat_id(chat_id)
         if not user:
             return None
-        return save_task(
+        result = save_task(
             user_id=user["id"],
             title=title,
             message_id=message_id,
             due_date=due_date,
             neo4j_node_id=neo4j_node_id
         )
+        print(f"[DB] ✅ Task saved to Postgres: '{title}' for {chat_id}")
+        return result
     except Exception as e:
         print(f"[DB] Failed to save task for {chat_id}: {e}")
         return None
@@ -123,11 +126,12 @@ def hook_mark_task_done(chat_id: str, title: str) -> None:
         user = get_user_by_chat_id(chat_id)
         if not user:
             return
+        user_uuid = uuid.UUID(user["id"])
         with get_session() as session:
             task = (
                 session.query(Task)
                 .filter(
-                    Task.user_id == user["id"],
+                    Task.user_id == user_uuid,
                     Task.title.ilike(f"%{title}%"),
                     Task.status == "pending"
                 )
@@ -136,6 +140,8 @@ def hook_mark_task_done(chat_id: str, title: str) -> None:
             if task:
                 task.status = "done"
                 session.commit()
+            else:
+                print(f"[DB] No pending task matching '{title}' for {chat_id}")
     except Exception as e:
         print(f"[DB] Failed to mark task done for {chat_id}: {e}")
 
@@ -145,11 +151,12 @@ def hook_cancel_task(chat_id: str, title: str) -> None:
         user = get_user_by_chat_id(chat_id)
         if not user:
             return
+        user_uuid = uuid.UUID(user["id"])
         with get_session() as session:
             task = (
                 session.query(Task)
                 .filter(
-                    Task.user_id == user["id"],
+                    Task.user_id == user_uuid,
                     Task.title.ilike(f"%{title}%"),
                     Task.status == "pending"
                 )
@@ -158,6 +165,8 @@ def hook_cancel_task(chat_id: str, title: str) -> None:
             if task:
                 task.status = "cancelled"
                 session.commit()
+            else:
+                print(f"[DB] No pending task matching '{title}' for {chat_id}")
     except Exception as e:
         print(f"[DB] Failed to cancel task for {chat_id}: {e}")
 
@@ -175,13 +184,15 @@ def hook_save_reminder(
         user = get_user_by_chat_id(chat_id)
         if not user:
             return None
-        return save_reminder(
+        result = save_reminder(
             user_id=user["id"],
             text=text,
             remind_at=remind_at,
             message_id=message_id,
             neo4j_node_id=neo4j_node_id
         )
+        print(f"[DB] ✅ Reminder saved to Postgres: '{text}' for {chat_id}")
+        return result
     except Exception as e:
         print(f"[DB] Failed to save reminder for {chat_id}: {e}")
         return None

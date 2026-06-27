@@ -45,18 +45,22 @@ def get_user_by_chat_id(chat_id: str) -> dict | None:
         return _user_to_dict(user) if user else None
 
 
-def set_notion_connected(user_id: str, connected: bool) -> dict:
+def set_notion_connected(user_id: str, connected: bool) -> dict | None:
     with get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return None
         user.notion_connected = connected
         session.commit()
         session.refresh(user)
         return _user_to_dict(user)
 
 
-def save_notion_token(user_id: str, token: str) -> dict:
+def save_notion_token(user_id: str, token: str) -> dict | None:
     with get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return None
         user.notion_access_token = token
         session.commit()
         session.refresh(user)
@@ -144,9 +148,11 @@ def save_capture(
         return _to_dict(capture)
 
 
-def mark_capture_processed(capture_id: str) -> dict:
+def mark_capture_processed(capture_id: str) -> dict | None:
     with get_session() as session:
         capture = session.query(Capture).filter_by(id=capture_id).first()
+        if not capture:
+            return None
         capture.processed = True
         session.commit()
         session.refresh(capture)
@@ -174,9 +180,11 @@ def save_voice_message(
         return _to_dict(voice)
 
 
-def update_voice_transcription(voice_message_id: str, transcription: str) -> dict:
+def update_voice_transcription(voice_message_id: str, transcription: str) -> dict | None:
     with get_session() as session:
         voice = session.query(VoiceMessage).filter_by(id=voice_message_id).first()
+        if not voice:
+            return None
         voice.transcription = transcription
         session.commit()
         session.refresh(voice)
@@ -218,18 +226,22 @@ def get_tasks(user_id: str, status: str = None) -> list:
         return [_to_dict(t) for t in query.all()]
 
 
-def update_task_status(task_id: str, status: str) -> dict:
+def update_task_status(task_id: str, status: str) -> dict | None:
     with get_session() as session:
         task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return None
         task.status = status
         session.commit()
         session.refresh(task)
         return _to_dict(task)
 
 
-def update_task(task_id: str, title: str = None, due_date: str = None) -> dict:
+def update_task(task_id: str, title: str = None, due_date: str = None) -> dict | None:
     with get_session() as session:
         task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return None
         if title:
             task.title = title
         if due_date:
@@ -257,6 +269,9 @@ def save_reminder(
     task_id: str = None,
     neo4j_node_id: str = None
 ) -> dict:
+    # Parse ISO string to datetime so SQLAlchemy/psycopg gets the right type
+    if isinstance(remind_at, str):
+        remind_at = datetime.fromisoformat(remind_at)
     with get_session() as session:
         reminder = Reminder(
             user_id=user_id,
@@ -298,18 +313,22 @@ def get_reminders_for_user(user_id: str, include_sent: bool = False) -> list:
         return [_to_dict(r) for r in query.all()]
 
 
-def mark_reminder_sent(reminder_id: str) -> dict:
+def mark_reminder_sent(reminder_id: str) -> dict | None:
     with get_session() as session:
         reminder = session.query(Reminder).filter_by(id=reminder_id).first()
+        if not reminder:
+            return None
         reminder.is_sent = True
         session.commit()
         session.refresh(reminder)
         return _to_dict(reminder)
 
 
-def update_reminder(reminder_id: str, text: str = None, remind_at: str = None) -> dict:
+def update_reminder(reminder_id: str, text: str = None, remind_at: str = None) -> dict | None:
     with get_session() as session:
         reminder = session.query(Reminder).filter_by(id=reminder_id).first()
+        if not reminder:
+            return None
         if text:
             reminder.text = text
         if remind_at:
@@ -349,9 +368,11 @@ def get_next_reminder(user_id: str) -> dict | None:
         return _to_dict(reminder) if reminder else None
 
 
-def update_task_notion_id(task_id: str, notion_page_id: str) -> dict:
+def update_task_notion_id(task_id: str, notion_page_id: str) -> dict | None:
     with get_session() as session:
         task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return None
         task.notion_page_id = notion_page_id
         session.commit()
         session.refresh(task)
@@ -394,5 +415,12 @@ def _to_dict(obj) -> dict:
     result = {}
     for col in obj.__table__.columns:
         val = getattr(obj, col.name)
-        result[col.name] = str(val) if val is not None else None
+        if val is None:
+            result[col.name] = None
+        elif isinstance(val, bool):
+            result[col.name] = val
+        elif hasattr(val, "isoformat"):
+            result[col.name] = val.isoformat()
+        else:
+            result[col.name] = str(val)
     return result

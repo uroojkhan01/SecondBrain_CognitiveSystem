@@ -1,5 +1,9 @@
+import json
 import requests
+from groq import Groq
+import anthropic
 from assistant_backend_1.helpers import load_users, save_users
+from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
@@ -81,6 +85,7 @@ def _create_root_page(token: str, title: str, emoji: str) -> str:
                 }
             },
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -102,6 +107,7 @@ def _create_child_page(token: str, parent_page_id: str, title: str, emoji: str) 
                 }
             },
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -120,6 +126,7 @@ def _create_database(token: str, parent_page_id: str, title: str, emoji: str, pr
             "title": [{"type": "text", "text": {"content": title}}],
             "properties": properties,
         },
+        timeout=30,
     )
     data = response.json()
     if response.status_code != 200:
@@ -148,6 +155,7 @@ def _patch_task_link(token: str, area_db_id: str, tasks_db_id: str) -> bool:
                 }
             }
         },
+        timeout=30,
     )
     if response.status_code != 200:
         print(f"❌ Failed to patch area DB {area_db_id}: {response.json()}")
@@ -183,6 +191,7 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
 
     # Update flat schemas in notion.database_ids
     if success:
+        users[str(chat_id)].setdefault("notion", {"token": None, "active_database_id": None, "database_ids": []})
         database_ids = users[str(chat_id)]["notion"].get("database_ids", [])
         area_db_ids = set(dbs.get(k) for k in area_keys)
         for db in database_ids:
@@ -200,6 +209,7 @@ def _page_exists(token: str, page_id: str) -> bool:
     response = requests.get(
         f"{NOTION_API}/pages/{page_id}",
         headers=_headers(token),
+        timeout=30,
     )
     data = response.json()
     return response.status_code == 200 and not data.get("archived", False)
@@ -223,6 +233,7 @@ def _notion_search(token: str, query: str, filter_type: str) -> list:
         f"{NOTION_API}/search",
         headers=_headers(token),
         json={"query": query, "filter": {"property": "object", "value": filter_type}},
+        timeout=30,
     )
     return response.json().get("results", [])
 
@@ -296,6 +307,11 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     users = load_users()
     existing = users.get(str(chat_id), {}).get("second_brain", {})
     if existing.get("page_id") and _page_exists(token, existing["page_id"]):
+        # Refresh token in user.json so it stays in sync with Postgres
+        users.setdefault(str(chat_id), {})
+        users[str(chat_id)].setdefault("notion", {"token": token, "active_database_id": None, "database_ids": []})
+        users[str(chat_id)]["notion"]["token"] = token
+        save_users(users)
         print(f"ℹ️ Second Brain already recorded in user.json for {chat_id}, skipping.")
         return "exists"
 
@@ -318,7 +334,12 @@ def setup_second_brain(chat_id: str, token: str) -> str:
 
         # Merge with existing OAuth database list (avoid duplicates)
         users.setdefault(str(chat_id), {})
-        existing_list = users[str(chat_id)].get("notion", {}).get("database_ids", [])
+        users[str(chat_id)].setdefault("notion", {
+            "token": token,
+            "active_database_id": None,
+            "database_ids": []
+        })
+        existing_list = users[str(chat_id)]["notion"].get("database_ids", [])
         existing_ids = {db["id"] for db in existing_list}
         merged = existing_list + [db for db in sb_database_list if db["id"] not in existing_ids]
 
@@ -436,6 +457,11 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     # ── 6. Update user.json ──────────────────────────────────────────
     users = load_users()
     users.setdefault(str(chat_id), {})
+    users[str(chat_id)].setdefault("notion", {
+        "token": token,
+        "active_database_id": None,
+        "database_ids": []
+    })
 
     existing = users[str(chat_id)]["notion"].get("database_ids", [])
     users[str(chat_id)]["notion"]["database_ids"] = existing + database_list
@@ -450,3 +476,285 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     save_users(users)
     print(f"🎉 Second Brain setup complete for {chat_id}")
     return "created"
+
+
+# =====================================================================
+# TASK MOVING AGENT
+# =====================================================================
+
+AREA_NAME_TO_KEY = {
+    "Health & Fitness":           "health_fitness",
+    "Finance & Wealth":           "finance_wealth",
+    "Career & Professional":      "career_professional",
+    "Personal Growth & Learning": "personal_growth_learning",
+    "Home & Lifestyle":           "home_lifestyle",
+}
+
+_TASK_AGENT_PROMPT = """You are a Second Brain task organization agent.
+
+You will receive a JSON list of tasks (each with an id and title).
+Your job is to:
+
+1. AREA CATEGORIZATION — assign each task to one of these areas (or null if unclear):
+   - "Health & Fitness": health, medical, exercise, diet, mental health, wellness, doctor, gym
+   - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses
+   - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development
+   - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading
+   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture
+
+2. PROJECT DETECTION — identify groups of 2 or more tasks that together form a larger project.
+   Only create a project when you are confident multiple tasks clearly share one overarching goal.
+   Name projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "task_categorizations": [
+    {
+      "task_id": "<notion_page_id>",
+      "task_title": "<task title>",
+      "area": "<area name or null>",
+      "ai_summary": "<one sentence describing this task in context of the area>"
+    }
+  ],
+  "projects": [
+    {
+      "name": "<Project Name Year>",
+      "status": "Proposed",
+      "task_ids": ["<task_page_id>", "<task_page_id>"]
+    }
+  ]
+}"""
+
+
+def _fetch_tasks(token: str, tasks_db_id: str) -> list:
+    """Fetch all non-archived tasks from the Tasks & To Dos database (handles pagination)."""
+    tasks = []
+    payload = {}
+    while True:
+        response = requests.post(
+            f"{NOTION_API}/databases/{tasks_db_id}/query",
+            headers=_headers(token),
+            json=payload,
+            timeout=30,
+        )
+        data = response.json()
+        for r in data.get("results", []):
+            if r.get("archived"):
+                continue
+            props = r.get("properties", {})
+            title = ""
+            for prop_data in props.values():
+                if prop_data.get("type") == "title":
+                    tl = prop_data.get("title", [])
+                    title = tl[0].get("plain_text", "").strip() if tl else ""
+                    break
+            tasks.append({"id": r["id"], "title": title})
+        if data.get("has_more"):
+            payload["start_cursor"] = data["next_cursor"]
+        else:
+            break
+    return tasks
+
+
+def _call_task_agent(tasks: list) -> dict | None:
+    """
+    Send tasks to Groq (with Claude fallback) for area categorization and project detection.
+    Returns parsed JSON dict or None on failure.
+    """
+    user_prompt = f"Analyze these tasks and return the JSON:\n{json.dumps(tasks, indent=2)}"
+    raw = None
+
+    # Try Groq keys
+    for api_key in GROQ_API_KEYS:
+        try:
+            client = Groq(api_key=api_key)
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=2048,
+                messages=[
+                    {"role": "system", "content": _TASK_AGENT_PROMPT},
+                    {"role": "user",   "content": user_prompt},
+                ],
+            )
+            raw = response.choices[0].message.content
+            print("[TaskAgent] Groq succeeded.")
+            break
+        except Exception as e:
+            print(f"[TaskAgent] Groq key failed: {e}")
+            continue
+
+    # Claude fallback
+    if raw is None:
+        try:
+            if not ANTHROPIC_API_KEY:
+                raise Exception("ANTHROPIC_API_KEY not set.")
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            resp = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=2048,
+                temperature=0,
+                system=_TASK_AGENT_PROMPT,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            raw = resp.content[0].text
+            print("[TaskAgent] Claude fallback succeeded.")
+        except Exception as e:
+            print(f"[TaskAgent] Claude fallback failed: {e}")
+            return None
+
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"[TaskAgent] JSON parse error: {e}")
+        return None
+
+
+def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str) -> str | None:
+    """Create an entry in an area database linked back to the original task."""
+    response = requests.post(
+        f"{NOTION_API}/pages",
+        headers=_headers(token),
+        json={
+            "parent": {"database_id": area_db_id},
+            "properties": {
+                "Name": {
+                    "title": [{"text": {"content": task["title"]}}]
+                },
+                "AI Executive Summary": {
+                    "rich_text": [{"text": {"content": ai_summary}}]
+                },
+                "Parent Task Link": {
+                    "relation": [{"id": task["id"]}]
+                },
+            },
+        },
+        timeout=30,
+    )
+    if response.status_code == 200:
+        return response.json()["id"]
+    print(f"❌ Failed to create area entry: {response.text}")
+    return None
+
+
+def _create_project_entry(token: str, master_db_id: str, project: dict) -> str | None:
+    """Create a project entry in Master Projects DB."""
+    response = requests.post(
+        f"{NOTION_API}/pages",
+        headers=_headers(token),
+        json={
+            "parent": {"database_id": master_db_id},
+            "properties": {
+                "Project Name": {
+                    "title": [{"text": {"content": project["name"]}}]
+                },
+                "Status": {
+                    "select": {"name": project.get("status", "Proposed")}
+                },
+            },
+        },
+        timeout=30,
+    )
+    if response.status_code == 200:
+        return response.json()["id"]
+    print(f"❌ Failed to create project entry: {response.text}")
+    return None
+
+
+def _link_task_to_project(token: str, task_id: str, project_page_id: str):
+    """Patch a task's Parent Project relation to point to a project page."""
+    response = requests.patch(
+        f"{NOTION_API}/pages/{task_id}",
+        headers=_headers(token),
+        json={
+            "properties": {
+                "Parent Project": {
+                    "relation": [{"id": project_page_id}]
+                }
+            }
+        },
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"❌ Failed to link task {task_id} to project: {response.text}")
+
+
+def run_notion_task_moving(chat_id: str, token: str) -> bool:
+    """
+    AI-powered task organisation agent.
+
+    1. Fetches all tasks from Tasks & To Dos DB.
+    2. Sends them to Groq (Claude fallback) for area categorization + project detection.
+    3. Creates entries in the relevant area board databases with Parent Task Link.
+    4. Creates project entries in Master Projects DB and links related tasks via Parent Project.
+
+    Tasks remain in the Tasks & To Dos database — area entries are reference copies.
+    Returns True on success, False on failure.
+    """
+    users = load_users()
+    second_brain = users.get(str(chat_id), {}).get("second_brain", {})
+    dbs = second_brain.get("databases", {})
+
+    tasks_db_id   = dbs.get("tasks_todos")
+    master_db_id  = dbs.get("master_projects")
+
+    if not tasks_db_id or not master_db_id:
+        print("❌ Second Brain databases not found in user.json. Run setup first.")
+        return False
+
+    # ── 1. Fetch tasks ────────────────────────────────────────────────
+    tasks = _fetch_tasks(token, tasks_db_id)
+    if not tasks:
+        print("ℹ️ No tasks found in Tasks & To Dos.")
+        return True
+
+    print(f"📋 Fetched {len(tasks)} tasks for analysis.")
+
+    # ── 2. LLM analysis ──────────────────────────────────────────────
+    result = _call_task_agent(tasks)
+    if not result:
+        print("❌ Task agent returned no result.")
+        return False
+
+    # ── 3. Create area entries ────────────────────────────────────────
+    categorizations = result.get("task_categorizations", [])
+    task_map = {t["id"]: t for t in tasks}
+
+    for item in categorizations:
+        area = item.get("area")
+        task_id = item.get("task_id")
+        ai_summary = item.get("ai_summary", "")
+
+        if not area or area not in AREA_NAME_TO_KEY:
+            continue
+
+        area_key = AREA_NAME_TO_KEY[area]
+        area_db_id = dbs.get(area_key)
+        if not area_db_id:
+            print(f"⚠️ No DB id for area '{area}' in user.json")
+            continue
+
+        task = task_map.get(task_id)
+        if not task:
+            continue
+
+        entry_id = _create_area_entry(token, area_db_id, task, ai_summary, tasks_db_id)
+        if entry_id:
+            print(f"✅ Area entry created: '{task['title']}' → {area}")
+
+    # ── 4. Create projects + link tasks ──────────────────────────────
+    for project in result.get("projects", []):
+        project_page_id = _create_project_entry(token, master_db_id, project)
+        if not project_page_id:
+            continue
+
+        print(f"✅ Project created: '{project['name']}'")
+
+        for task_id in project.get("task_ids", []):
+            _link_task_to_project(token, task_id, project_page_id)
+            task = task_map.get(task_id, {})
+            print(f"   🔗 Linked task: '{task.get('title', task_id)}'")
+
+    print("🎉 Task moving agent complete.")
+    return True

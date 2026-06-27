@@ -7,12 +7,22 @@ from datetime import datetime, timedelta
 from assistant_backend_1.models.db import get_user_by_chat_id, get_notion_databases
 
 def get_user_notion_credentials(chat_id: str):
+    # Token — always read from Postgres (updated on every OAuth)
     user = get_user_by_chat_id(chat_id)
     if not user:
         return None, None
     token = user.get("notion_access_token")
-    dbs = get_notion_databases(user["id"])
-    database_id = dbs[0]["notion_db_id"] if dbs else None
+
+    # Active database — read from user.json where setup_second_brain sets it
+    # to the Tasks & To Dos DB.  Fall back to Postgres first-row only if missing.
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    notion = users.get(str(chat_id), {}).get("notion", {})
+    database_id = notion.get("active_database_id")
+    if not database_id:
+        dbs = get_notion_databases(user["id"])
+        database_id = dbs[0]["notion_db_id"] if dbs else None
+
     return token, database_id
 
 
