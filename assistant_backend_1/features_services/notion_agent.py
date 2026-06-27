@@ -62,8 +62,7 @@ MASTER_PROJECTS_PROPERTIES = {
         }
     },
     "Target Deadline": {"date": {}},
-    # Progress Bar becomes a formula after patch_done_and_rollups() runs
-    "Progress Bar": {"number": {"format": "number"}},
+    # Progress Bar is created as a formula by patch_done_and_rollups() — not here
 }
 
 
@@ -302,7 +301,16 @@ def patch_done_and_rollups(token: str, tasks_db_id: str, master_db_id: str) -> b
         return False
     print("✅ Rollup properties added to Master Projects DB")
 
-    # ── 4. Convert Progress Bar to formula ────────────────────────────
+    # ── 4. Delete any existing Progress Bar (may be a plain Number) then create as formula ──
+    # Notion API does not allow changing a property's type in-place, so we
+    # delete the old one first (set to null) and recreate it as a formula.
+    requests.patch(
+        f"{NOTION_API}/databases/{master_db_id}",
+        headers=_headers(token),
+        json={"properties": {"Progress Bar": None}},
+        timeout=30,
+    )
+
     r = requests.patch(
         f"{NOTION_API}/databases/{master_db_id}",
         headers=_headers(token),
