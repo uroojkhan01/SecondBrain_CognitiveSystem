@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from assistant_backend_1.api.routers.telegram_router import router as telegram_router
 from assistant_backend_1.features_services.reminders import start_reminder_scheduler
 import threading
+from pydantic import BaseModel
+import assistant_backend_1.config as config
 
 
 @asynccontextmanager
@@ -20,9 +22,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(telegram_router)
-
-from pydantic import BaseModel
-import assistant_backend_1.config as config
 
 class ToggleLLMRequest(BaseModel):
     enable: bool

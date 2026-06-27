@@ -1,6 +1,8 @@
 from fastapi import Request
 from assistant_backend_1.features_services.telegram import send_message
-from assistant_backend_1.helpers import  load_users, save_users 
+from assistant_backend_1.helpers import load_users, save_users
+from assistant_backend_1.features_services.notion_agent import setup_second_brain
+import asyncio
 import requests
 from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
 from fastapi.responses import HTMLResponse
@@ -115,6 +117,11 @@ async def notion_oauth_callback(request: Request):
         "database_ids": database_list
     }
     save_users(users)
+
+    # Build Second Brain structure after OAuth
+    success = await asyncio.to_thread(setup_second_brain, chat_id, access_token)
+    if not success:
+        await send_message(chat_id, "⚠️ Notion connected, but Second Brain setup failed. Please try reconnecting.")
 
     # Notify user
     if len(database_list) > 1:

@@ -9,6 +9,8 @@ from assistant_backend_1.features_services.telegram import (
 from assistant_backend_1.features_services.voice_to_text import transcribe_audio_file
 import asyncio
 from assistant_backend_1.features_services.llm_conversation import process_user_input
+### process user input through llm model ###
+from assistant_backend_1.config import ENABLE_LLM_API
 
 
 async def telegram_webhook(request: Request):
@@ -71,8 +73,7 @@ async def telegram_webhook(request: Request):
                 )
                 return {"status": "ok"}
 
-    ### process user input through llm model ###
-    from assistant_backend_1.config import ENABLE_LLM_API
+
     if ENABLE_LLM_API:
         reply = process_user_input(chat_id, user_input)
     else:
