@@ -20,13 +20,21 @@ import uuid
 
 # ─── User ─────────────────────────────────────────────────────────
 
+# def hook_upsert_user(chat_id: str, first_name: str = None, username: str = None) -> dict | None:
+#     try:
+#         return upsert_user(chat_id, first_name, username)
+#     except Exception as e:
+#         print(f"[DB] Failed to upsert user {chat_id}: {e}")
+#         return None
 def hook_upsert_user(chat_id: str, first_name: str = None, username: str = None) -> dict | None:
+    print(f"[DB] hook_upsert_user called for {chat_id}")
     try:
-        return upsert_user(chat_id, first_name, username)
+        result = upsert_user(chat_id, first_name, username)
+        print(f"[DB] ✅ User saved to Postgres: {chat_id}")
+        return result
     except Exception as e:
-        print(f"[DB] Failed to upsert user {chat_id}: {e}")
+        print(f"[DB] ❌ Failed to upsert user {chat_id}: {e}")
         return None
-
 
 # ─── Messages ─────────────────────────────────────────────────────
 
