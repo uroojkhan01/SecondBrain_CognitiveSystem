@@ -40,10 +40,17 @@ async def telegram_webhook(request: Request):
     username = message["chat"].get("username")
 
     # mirror into Postgres
+    # hook_upsert_user(chat_id, first_name=first_name, username=username)
+    # hook_save_capture(chat_id, user_input)
+    # if "voice" in message:
+    #     hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice_file_id, transcription=transcript)
+
     hook_upsert_user(chat_id, first_name=first_name, username=username)
     hook_save_capture(chat_id, user_input)
+    saved_msg = hook_save_message(chat_id, user_input, input_type="voice" if "voice" in message else "text")
     if "voice" in message:
-        hook_save_voice_message(chat_id, message_id=None, telegram_file_id=voice_file_id, transcription=transcript)
+        msg_id = saved_msg["id"] if saved_msg else None
+        hook_save_voice_message(chat_id, message_id=msg_id, telegram_file_id=voice_file_id, transcription=transcript)
 
     save_user(chat_id, first_name, username)
 
@@ -156,7 +163,7 @@ async def telegram_webhook(request: Request):
     else:
         reply = f"[LLM API Disabled] You said: {user_input}"
 
-    hook_save_message(chat_id, user_input, intent=None, input_type="voice" if "voice" in message else "text")
+    # hook_save_message(chat_id, user_input, intent=None, input_type="voice" if "voice" in message else "text")
 
     print("sending message back to user")
     await send_message(chat_id, reply)
