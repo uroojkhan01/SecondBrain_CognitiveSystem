@@ -147,6 +147,16 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             else:
                 print(f"⚠️ No matching reminder found for: {reminder_text}")
             delete_task_from_notion(chat_id, reminder_text)
+            from assistant_backend_1.models.db import get_user_by_chat_id, get_reminders_for_user, delete_reminder as db_delete_reminder
+            user = get_user_by_chat_id(chat_id)
+            if user:
+                reminders = get_reminders_for_user(user["id"], include_sent=True)
+                for r in reminders:
+                    if reminder_text.lower() in r["text"].lower():
+                        db_delete_reminder(r["id"])
+                        print(f"[DB] ✅ Reminder deleted from Postgres: {reminder_text}")
+                        break
+
 
     elif intent == "update_reminder":
         if llm_response.reminder:
@@ -198,6 +208,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             else:
                 print(f"⚠️ No matching task found in Neo4j: {task_title}")
             delete_task_from_notion(chat_id, task_title)
+            hook_cancel_task(chat_id, task_title)
 
     elif intent == "update_task":
         if llm_response.task:
