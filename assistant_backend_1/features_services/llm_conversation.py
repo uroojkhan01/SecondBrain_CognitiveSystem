@@ -4,7 +4,7 @@ import anthropic
 from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY
 from assistant_backend_1.prompts import CLASSIFIER_SYSTEM_PROMPT, NEO4J_CONTEXT_PROMPT
 from assistant_backend_1.models.llmresponse import LLMResponse
-from assistant_backend_1.features_services.reminders import get_all_reminders, delete_reminder,update_reminder
+from assistant_backend_1.features_services.reminders import get_all_reminders, delete_reminder, update_reminder
 from assistant_backend_1.features_services.memory_journal import (
     get_user_context,
     save_memory,
@@ -16,7 +16,8 @@ from assistant_backend_1.features_services.memory_journal import (
     update_entity,
     get_all_tasks,
     delete_local_task,
-    update_local_task
+    update_local_task,
+    save_or_update_user
 )
 from assistant_backend_1.features_services.notion import (
     save_task_to_notion,
@@ -41,6 +42,14 @@ INTENTS_TO_SKIP_SAVING = {
     "seek_advice",
     "daily_brief",
     "panic_mode"
+}
+
+# Intents that mean something real is being saved
+INTENTS_THAT_SAVE = {
+    "save_memory", "set_reminder", "create_task",
+    "habit_track", "mark_done", "update_memory",
+    "brain_dump", "vent", "delete_task", "delete_reminder",
+    "update_task", "update_reminder"
 }
 
 
@@ -80,14 +89,16 @@ def handle_brain_dump(chat_id: str, items: list):
             criticality = item["task"].get("criticality")
             save_task(chat_id, title, due)
             save_task_to_notion(chat_id, title, due, criticality)
-            hook_save_task(chat_id, item["task"].get("title"), due_date=item["task"].get("due"))
+            hook_save_task(chat_id, item["task"].get(
+                "title"), due_date=item["task"].get("due"))
         elif intent == "set_reminder" and item.get("reminder"):
             save_reminder(
                 chat_id,
                 item["reminder"].get("text"),
                 item["reminder"].get("datetime")
             )
-            hook_save_reminder(chat_id, item["reminder"].get("text"), remind_at=item["reminder"].get("datetime"))
+            hook_save_reminder(chat_id, item["reminder"].get(
+                "text"), remind_at=item["reminder"].get("datetime"))
         elif intent == "save_memory" and item.get("memory_summary"):
             save_memory(
                 chat_id,
@@ -129,7 +140,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 hook_save_reminder(chat_id, text, remind_at=remind_at)
                 save_task_to_notion(chat_id, text, remind_at, criticality=None)
             else:
-                print(f"⏳ Reminder incomplete (missing {'datetime' if not remind_at else 'text'}) — waiting for more info.")
+                print(
+                    f"⏳ Reminder incomplete (missing {'datetime' if not remind_at else 'text'}) — waiting for more info.")
 
     elif intent == "delete_reminder":
         if llm_response.reminder:
@@ -150,13 +162,14 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             from assistant_backend_1.models.db import get_user_by_chat_id, get_reminders_for_user, delete_reminder as db_delete_reminder
             user = get_user_by_chat_id(chat_id)
             if user:
-                reminders = get_reminders_for_user(user["id"], include_sent=True)
+                reminders = get_reminders_for_user(
+                    user["id"], include_sent=True)
                 for r in reminders:
                     if reminder_text.lower() in r["text"].lower():
                         db_delete_reminder(r["id"])
-                        print(f"[DB] ✅ Reminder deleted from Postgres: {reminder_text}")
+                        print(
+                            f"[DB] ✅ Reminder deleted from Postgres: {reminder_text}")
                         break
-
 
     elif intent == "update_reminder":
         if llm_response.reminder:
@@ -181,7 +194,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 print(f"{'✅' if success else '❌'} Update reminder: {reminder_text}")
             else:
                 print(f"⚠️ No matching reminder found for: {reminder_text}")
-            update_task_in_notion(chat_id, reminder_text, new_title=new_text, new_due=new_datetime)
+            update_task_in_notion(chat_id, reminder_text,
+                                  new_title=new_text, new_due=new_datetime)
 
     elif intent == "create_task":
         if llm_response.task:
@@ -222,14 +236,16 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                  or t["title"].lower() in task_title.lower()),
                 None
             )
-            hook_save_task(chat_id, llm_response.task.get("title"), due_date=llm_response.task.get("due"))
+            hook_save_task(chat_id, llm_response.task.get(
+                "title"), due_date=llm_response.task.get("due"))
             if matched:
-                success = update_local_task(chat_id, matched["id"], title=new_title, due=new_due)
+                success = update_local_task(
+                    chat_id, matched["id"], title=new_title, due=new_due)
                 print(f"{'✅' if success else '❌'} Update task (Neo4j): {task_title}")
             else:
                 print(f"⚠️ No matching task found in Neo4j: {task_title}")
-            update_task_in_notion(chat_id, task_title, new_title=new_title, new_due=new_due)
-
+            update_task_in_notion(chat_id, task_title,
+                                  new_title=new_title, new_due=new_due)
 
     elif intent == "habit_track":
         if llm_response.habit:
@@ -247,8 +263,6 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             hook_mark_task_done(chat_id, title)
             mark_task_done_in_notion(chat_id, title)
 
-            
-
     elif intent == "update_memory":
         if llm_response.entities:
             update_entity(chat_id, llm_response.entities)
@@ -261,7 +275,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             handle_brain_dump(chat_id, llm_response.items)
 
 
-def process_user_input(chat_id: str, user_input: str) -> str:
+def process_user_input(chat_id: str, user_input: str, first_name: str, username: str) -> str:
     """
     Takes user message, runs through Groq LLM first.
     If all Groq API keys fail, switches to Claude as fallback.
@@ -269,10 +283,10 @@ def process_user_input(chat_id: str, user_input: str) -> str:
     """
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = []
-    
+
     history = conversation_histories[chat_id]
     history.append({"role": "user", "content": user_input})
-    
+
     try:
         system_prompt = build_system_prompt(chat_id)
         response = None
@@ -309,10 +323,11 @@ def process_user_input(chat_id: str, user_input: str) -> str:
             print(f"[LLM] All Groq keys exhausted. Switching to Claude fallback...")
             try:
                 if not ANTHROPIC_API_KEY:
-                    raise Exception("ANTHROPIC_API_KEY not set in environment.")
-                
+                    raise Exception(
+                        "ANTHROPIC_API_KEY not set in environment.")
+
                 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-                
+
                 # Claude requires system prompt separately, not in messages array
                 claude_response = claude_client.messages.create(
                     model="claude-sonnet-4-6",
@@ -321,7 +336,7 @@ def process_user_input(chat_id: str, user_input: str) -> str:
                     system=system_prompt,
                     messages=history  # same history format works for Claude
                 )
-                
+
                 # Normalize Claude response to match Groq response structure
                 raw = claude_response.content[0].text
                 used_claude = True
@@ -347,7 +362,7 @@ def process_user_input(chat_id: str, user_input: str) -> str:
                 cleaned = cleaned[4:]
             cleaned = cleaned.rsplit("```", 1)[0].strip()
         data = json.loads(cleaned)
-        
+
         llm_response = LLMResponse(
             intent=data.get("intent", "conversation"),
             reply_to_user=data.get("reply_to_user", "I'm here, tell me more."),
@@ -361,14 +376,18 @@ def process_user_input(chat_id: str, user_input: str) -> str:
         )
 
         history.append({"role": "assistant", "content": raw})
-        
+
         if len(history) > 20:
             conversation_histories[chat_id] = history[-20:]
 
         provider = "Claude" if used_claude else "Groq"
-        print(f"[LLM] Provider: {provider} | Intent: {llm_response.intent} | Reply: {llm_response.reply_to_user}")
+        print(
+            f"[LLM] Provider: {provider} | Intent: {llm_response.intent} | Reply: {llm_response.reply_to_user}")
         print(f"[LLM] Entities: {llm_response.entities}")
         print(f"[LLM] Memory: {llm_response.memory_summary}")
+
+        if llm_response.intent in INTENTS_THAT_SAVE:
+            save_or_update_user(chat_id, first_name or "", username or "")
 
         route_intent(chat_id, llm_response, user_input)
         return llm_response.reply_to_user

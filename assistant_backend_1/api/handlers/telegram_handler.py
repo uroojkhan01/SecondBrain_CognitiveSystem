@@ -47,10 +47,12 @@ async def telegram_webhook(request: Request):
 
     hook_upsert_user(chat_id, first_name=first_name, username=username)
     hook_save_capture(chat_id, user_input)
-    saved_msg = hook_save_message(chat_id, user_input, input_type="voice" if "voice" in message else "text")
+    saved_msg = hook_save_message(
+        chat_id, user_input, input_type="voice" if "voice" in message else "text")
     if "voice" in message:
         msg_id = saved_msg["id"] if saved_msg else None
-        hook_save_voice_message(chat_id, message_id=msg_id, telegram_file_id=voice_file_id, transcription=transcript)
+        hook_save_voice_message(
+            chat_id, message_id=msg_id, telegram_file_id=voice_file_id, transcription=transcript)
 
     save_user(chat_id, first_name, username)
 
@@ -62,7 +64,8 @@ async def telegram_webhook(request: Request):
         current_users = load_users()
         user_data = current_users.get(str(chat_id), {})
         token = user_data.get("notion", {}).get("token")
-        tasks_db = user_data.get("second_brain", {}).get("databases", {}).get("tasks_todos")
+        tasks_db = user_data.get("second_brain", {}).get(
+            "databases", {}).get("tasks_todos")
         if not token or not tasks_db:
             await send_message(chat_id, "⚠️ Second Brain is not set up yet. Please connect Notion first.")
             return {"status": "ok"}
@@ -84,7 +87,8 @@ async def telegram_webhook(request: Request):
             return {"status": "ok"}
         _pending_done_tasks[str(chat_id)] = tasks
         lines = "\n".join([
-            f"{i+1}. {t['title']}" + (f"  _(due {t['due'][:10]})_" if t.get("due") else "")
+            f"{i+1}. {t['title']}" +
+            (f"  _(due {t['due'][:10]})_" if t.get("due") else "")
             for i, t in enumerate(tasks)
         ])
         await send_message(chat_id, f"Which task did you complete? Reply with the number:\n\n{lines}")
@@ -118,7 +122,8 @@ async def telegram_webhook(request: Request):
         current_users = load_users()
         user_data = current_users.get(str(chat_id), {})
         notion_data = user_data.get("notion", {})
-        selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
+        selectable = [db for db in notion_data.get(
+            "database_ids", []) if db.get("type") == "database"]
         if selectable:
             if 0 <= index < len(selectable):
                 selected_db = selectable[index]
@@ -159,7 +164,7 @@ async def telegram_webhook(request: Request):
 
     # Notion is connected and active — process with LLM
     if ENABLE_LLM_API:
-        reply = process_user_input(chat_id, user_input)
+        reply = process_user_input(chat_id, user_input, first_name, username)
     else:
         reply = f"[LLM API Disabled] You said: {user_input}"
 
