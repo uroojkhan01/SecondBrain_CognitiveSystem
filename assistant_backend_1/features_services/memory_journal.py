@@ -287,196 +287,112 @@ def update_entity(chat_id: str, entities: list):
 # ─── Query Functions ───────────────────────────────────────────────
 
 def get_user_context(chat_id: str) -> str:
-    """
-    Pull everything known about this user as plain text.
-    Injected into LLM prompt so it can answer naturally.
-    The LLM does the reasoning — we just feed it rich facts.
 
-    Structure returned:
-    - Things this user has shared (memories)
-    - People they know
-    - Places they visit
-    - Health (medications, conditions)
-    - Interests and goals
-    - Pending tasks
-    - Reminders
-    - Recent habits
-    """
     with get_session() as session:
+        result = session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})
+            OPTIONAL MATCH (u)-[:REMEMBERS]->(m:Memory)
+            OPTIONAL MATCH (u)-[er]->(e:Entity {chat_id: $chat_id})
+            OPTIONAL MATCH (u)-[:CREATED]->(t:Task {status: 'pending'})
+            OPTIONAL MATCH (u)-[:SET]->(r:Reminder)
+            WHERE r.is_sent = false OR r.is_sent IS NULL
+            OPTIONAL MATCH (u)-[:TRACKED]->(log:HabitLog)-[:OF]->(h:Habit)
+            RETURN
+                collect(DISTINCT m.summary)[0..30] as memories,
+                collect(DISTINCT {name: e.name, type: e.type, relation: e.relation})[0..20] as entities,
+                collect(DISTINCT {title: t.title, due: t.due})[0..10] as tasks,
+                collect(DISTINCT {text: r.text, remind_at: r.remind_at})[0..5] as reminders,
+                collect(DISTINCT {name: h.name, value: log.value})[0..5] as habits
+            """,
+            chat_id=chat_id
+        )
+
+        record = result.single()
+        if not record:
+            return "No previous information about this user yet."
+
         lines = []
 
-        # ── Memories (most important — rich plain text summaries) ──
-        memories = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:REMEMBERS]->(m:Memory)
-            RETURN m.summary as summary
-            ORDER BY m.created_at DESC
-            LIMIT 30
-            """,
-            chat_id=chat_id
-        )
-        memory_lines = [r["summary"] for r in memories]
-        if memory_lines:
+        # ── Memories ──
+        memories = [m for m in record["memories"] if m]
+        if memories:
             lines.append("Things this user has shared:")
-            lines.extend([f"  - {s}" for s in memory_lines])
+            lines.extend([f"  - {s}" for s in memories])
 
-        # ── People they know ──
-        people = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:KNOWS]->(e:Entity {chat_id: $chat_id})
-            WHERE e.type = 'person'
-            RETURN e.name as name, e.relation as relation
-            """,
-            chat_id=chat_id
-        )
-        people_lines = []
-        for r in people:
-            if r["relation"]:
-                people_lines.append(
-                    f"  - {r['name']} is their {r['relation']}")
-            else:
-                people_lines.append(f"  - {r['name']} (relationship unknown)")
-        if people_lines:
+        # ── Entities split by type ──
+        entities = [e for e in record["entities"] if e and e.get("name")]
+
+        people = [e for e in entities if e.get("type") == "person"]
+        if people:
             lines.append("People this user knows:")
-            lines.extend(people_lines)
+            for e in people:
+                if e.get("relation"):
+                    lines.append(f"  - {e['name']} is their {e['relation']}")
+                else:
+                    lines.append(f"  - {e['name']} (relationship unknown)")
 
-        # ── Places ──
-        places = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:VISITS_OR_LIVES_IN]->(e:Entity {chat_id: $chat_id})
-            WHERE e.type = 'place'
-            RETURN e.name as name, e.relation as relation
-            """,
-            chat_id=chat_id
-        )
-        place_lines = []
-        for r in places:
-            if r["relation"]:
-                place_lines.append(f"  - {r['name']} ({r['relation']})")
-            else:
-                place_lines.append(f"  - {r['name']}")
-        if place_lines:
-            lines.append("Places this user mentions:")
-            lines.extend(place_lines)
+        places = [e for e in entities if e.get("type") == "place"]
+        if places:
+            lines.append("Places:")
+            for e in places:
+                rel = f" ({e['relation']})" if e.get("relation") else ""
+                lines.append(f"  - {e['name']}{rel}")
 
-        # ── Health (medications, conditions) ──
-        health = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:HAS_OR_TAKES]->(e:Entity {chat_id: $chat_id})
-            WHERE e.type = 'health'
-            RETURN e.name as name, e.relation as relation
-            """,
-            chat_id=chat_id
-        )
-        health_lines = []
-        for r in health:
-            if r["relation"]:
-                health_lines.append(f"  - {r['name']} ({r['relation']})")
-            else:
-                health_lines.append(f"  - {r['name']}")
-        if health_lines:
+        health = [e for e in entities if e.get("type") == "health"]
+        if health:
             lines.append("Health information:")
-            lines.extend(health_lines)
+            for e in health:
+                rel = f" ({e['relation']})" if e.get("relation") else ""
+                lines.append(f"  - {e['name']}{rel}")
 
-        # ── Interests and goals ──
-        interests = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:INTERESTED_IN|WANTS]->(e:Entity {chat_id: $chat_id})
-            WHERE e.type IN ['interest', 'goal']
-            RETURN e.name as name, e.type as type, e.relation as relation
-            """,
-            chat_id=chat_id
-        )
-        interest_lines = []
-        for r in interests:
-            label = "Goal" if r["type"] == "goal" else "Interest"
-            interest_lines.append(f"  - {label}: {r['name']}")
-        if interest_lines:
+        interests = [e for e in entities if e.get(
+            "type") in ["interest", "goal"]]
+        if interests:
             lines.append("Interests and goals:")
-            lines.extend(interest_lines)
+            for e in interests:
+                label = "Goal" if e.get("type") == "goal" else "Interest"
+                lines.append(f"  - {label}: {e['name']}")
 
-        # ── Organizations ──
-        orgs = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:AFFILIATED_WITH]->(e:Entity {chat_id: $chat_id})
-            WHERE e.type = 'organization'
-            RETURN e.name as name, e.relation as relation
-            """,
-            chat_id=chat_id
-        )
-        org_lines = []
-        for r in orgs:
-            if r["relation"]:
-                org_lines.append(f"  - {r['name']} ({r['relation']})")
-            else:
-                org_lines.append(f"  - {r['name']}")
-        if org_lines:
+        orgs = [e for e in entities if e.get("type") == "organization"]
+        if orgs:
             lines.append("Organizations:")
-            lines.extend(org_lines)
+            for e in orgs:
+                rel = f" ({e['relation']})" if e.get("relation") else ""
+                lines.append(f"  - {e['name']}{rel}")
 
         # ── Pending tasks ──
-        tasks = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task {status: 'pending'})
-            RETURN t.title as title, t.due as due
-            ORDER BY t.created_at DESC
-            LIMIT 10
-            """,
-            chat_id=chat_id
-        )
-        task_lines = []
-        for r in tasks:
-            due = f" (due: {r['due']})" if r["due"] else ""
-            task_lines.append(f"  - {r['title']}{due}")
-        if task_lines:
+        tasks = [t for t in record["tasks"] if t and t.get("title")]
+        if tasks:
             lines.append("Pending tasks:")
-            lines.extend(task_lines)
+            for t in tasks:
+                due = f" (due: {t['due']})" if t.get("due") else ""
+                lines.append(f"  - {t['title']}{due}")
 
         # ── Reminders ──
-        reminders = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:SET]->(r:Reminder)
-            WHERE r.is_sent = false OR r.is_sent IS NULL
-            RETURN r.text as text, r.remind_at as remind_at
-            ORDER BY r.created_at DESC
-            LIMIT 5
-            """,
-            chat_id=chat_id
-        )
-        reminder_lines = []
-        for r in reminders:
-            time = f" at {r['remind_at']}" if r["remind_at"] else ""
-            reminder_lines.append(f"  - {r['text']}{time}")
-        if reminder_lines:
+        reminders = [r for r in record["reminders"] if r and r.get("text")]
+        if reminders:
             lines.append("Reminders:")
-            lines.extend(reminder_lines)
+            for r in reminders:
+                time = f" at {r['remind_at']}" if r.get("remind_at") else ""
+                lines.append(f"  - {r['text']}{time}")
 
         # ── Habits ──
-        habits = session.run(
-            """
-            MATCH (u:User {chat_id: $chat_id})-[:TRACKED]->(log:HabitLog)-[:OF]->(h:Habit)
-            RETURN h.name as name, log.value as value, log.logged_at as logged_at
-            ORDER BY log.logged_at DESC
-            LIMIT 5
-            """,
-            chat_id=chat_id
-        )
-        habit_lines = []
-        for r in habits:
-            habit_lines.append(f"  - {r['name']}: {r['value']}")
-        if habit_lines:
-            lines.append("Recent habits tracked:")
-            lines.extend(habit_lines)
+        habits = [h for h in record["habits"] if h and h.get("name")]
+        if habits:
+            lines.append("Recent habits:")
+            for h in habits:
+                lines.append(f"  - {h['name']}: {h['value']}")
 
         if not lines:
             return "No previous information about this user yet."
 
         return "\n".join(lines)
 
-
 # =====================================================================
 # NEO4J LOCAL REMINDER HELPERS
 # =====================================================================
+
 
 def get_due_reminders() -> list:
     """Fetch all reminders that have not been sent yet."""
