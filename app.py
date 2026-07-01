@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from assistant_backend_1.api.routers.telegram_router import router as telegram_router
-from assistant_backend_1.features_services.reminders import start_reminder_scheduler
+from assistant_backend_1.backgroundjobs import start_reminder_scheduler
 import threading
 from pydantic import BaseModel
 import assistant_backend_1.config as config

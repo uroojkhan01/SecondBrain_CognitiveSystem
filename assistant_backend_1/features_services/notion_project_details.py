@@ -12,18 +12,10 @@ On every refresh we wipe only the toggle's children and rewrite them.
 
 import requests
 from assistant_backend_1.helpers import load_users
+from assistant_backend_1.features_services.notion_schema import AREA_DATABASES
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
-
-AREA_DATABASES = [
-    ("Health & Fitness",           "💪"),
-    ("Finance & Wealth",           "💰"),
-    ("Career & Professional",      "💼"),
-    ("Personal Growth & Learning", "🌱"),
-    ("Home & Lifestyle",           "🏠"),
-    ("Family & Friends",           "🤝"),
-]
 
 _AREA_EMOJI_MAP = {name: emoji for name, emoji in AREA_DATABASES}
 
