@@ -12,6 +12,7 @@ from assistant_backend_1.features_services.memory_journal import (
     save_task,
     save_habit,
     mark_task_done,
+    mark_task_pending,
     mark_reminder_done,
     update_entity,
     get_all_tasks,
@@ -25,6 +26,7 @@ from assistant_backend_1.features_services.notion import (
     update_task_in_notion,
     save_reminder_to_notion,
     mark_task_done_in_notion,
+    mark_task_undone_in_notion,
 )
 
 from assistant_backend_1.models.db_hooks import (
@@ -229,6 +231,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             task_title = llm_response.task.get("title", "")
             new_title = llm_response.task.get("new_title")
             new_due = llm_response.task.get("due")
+            new_criticality = llm_response.task.get("criticality")
             all_tasks = get_all_tasks(chat_id)
             matched = next(
                 (t for t in all_tasks
@@ -245,7 +248,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             else:
                 print(f"⚠️ No matching task found in Neo4j: {task_title}")
             update_task_in_notion(chat_id, task_title,
-                                  new_title=new_title, new_due=new_due)
+                                  new_title=new_title, new_due=new_due, new_criticality=new_criticality)
 
     elif intent == "habit_track":
         if llm_response.habit:
@@ -262,6 +265,12 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             mark_reminder_done(chat_id, title)
             hook_mark_task_done(chat_id, title)
             mark_task_done_in_notion(chat_id, title)
+
+    elif intent == "mark_undone":
+        if llm_response.task:
+            title = llm_response.task.get("title")
+            mark_task_pending(chat_id, title)
+            mark_task_undone_in_notion(chat_id, title)
 
     elif intent == "update_memory":
         if llm_response.entities:

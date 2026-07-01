@@ -233,6 +233,20 @@ def mark_task_done(chat_id: str, title: str):
         )
 
 
+def mark_task_pending(chat_id: str, title: str):
+    """Revert a task back to pending (undo an accidental mark-done)."""
+    with get_session() as session:
+        session.run(
+            """
+            MATCH (u:User {chat_id: $chat_id})-[:CREATED]->(t:Task)
+            WHERE toLower(t.title) CONTAINS toLower($title)
+            SET t.status = 'pending', t.completed_at = null
+            """,
+            chat_id=chat_id,
+            title=title
+        )
+
+
 def mark_reminder_done(chat_id: str, text: str):
     """Mark a matching reminder as sent/done in Neo4j."""
     with get_session() as session:

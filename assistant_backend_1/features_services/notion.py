@@ -236,14 +236,24 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None, criticality: 
         return False
 
 
-def find_task_in_notion(chat_id: str, title: str) -> str | None:
-    """Search the active tasks database for a page matching title. Returns page_id or None."""
+def find_task_in_notion(chat_id: str, title: str, include_done: bool = False) -> str | None:
+    """Search the active tasks database for a page matching title. Returns page_id or None.
+    Set include_done=True to also search tasks already marked done."""
     token, database_id = get_user_notion_credentials(chat_id)
     if not token or not database_id:
         return None
 
     schema = get_active_database_schema(chat_id)
     title_col = get_column_name(schema, "title") or "Task Name"
+
+    filter_body = {"property": title_col, "title": {"contains": title}}
+    if not include_done:
+        filter_body = {
+            "and": [
+                {"property": title_col, "title": {"contains": title}},
+                {"property": "Done", "checkbox": {"equals": False}},
+            ]
+        }
 
     try:
         response = requests.post(
@@ -253,12 +263,8 @@ def find_task_in_notion(chat_id: str, title: str) -> str | None:
                 "Content-Type": "application/json",
                 "Notion-Version": "2022-06-28",
             },
-            json={
-                "filter": {
-                    "property": title_col,
-                    "title": {"contains": title}
-                }
-            }
+            json={"filter": filter_body},
+            timeout=30,
         )
         results = response.json().get("results", [])
         if results:
@@ -299,6 +305,76 @@ def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
         return False
 
 
+def mark_task_undone_in_notion(chat_id: str, title: str) -> bool:
+    """Set Done = False on the matching task, reverting an accidental mark-done."""
+    token, _ = get_user_notion_credentials(chat_id)
+    if not token:
+        return False
+    # find_task_in_notion filters by Done=False by default, so search all pages
+    page_id = find_task_in_notion(chat_id, title, include_done=True)
+    if not page_id:
+        print(f"⚠️ Could not find Notion task to unmark: {title}")
+        return False
+    try:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"properties": {"Done": {"checkbox": False}}},
+            timeout=30,
+        )
+        if response.status_code == 200:
+            print(f"✅ Task unmarked in Notion: {title}")
+            update_project_progress(chat_id, page_id)
+            return True
+        print(f"❌ Failed to unmark task in Notion: {response.text}")
+        return False
+    except Exception as e:
+        print(f"❌ Error unmarking task in Notion: {e}")
+        return False
+
+
+def _query_all_pages(headers: dict, db_id: str, filter_body: dict = None) -> list | None:
+    """Query a Notion database with pagination, returning all results.
+    Returns None if any API call fails (so callers can skip the update safely)."""
+    results = []
+    payload = filter_body or {}
+    while True:
+        r = requests.post(
+            f"https://api.notion.com/v1/databases/{db_id}/query",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+        if r.status_code != 200:
+            print(f"❌ Notion query failed ({r.status_code}): {r.text[:200]}")
+            return None
+        data = r.json()
+        results.extend(data.get("results", []))
+        if data.get("has_more"):
+            payload = {**payload, "start_cursor": data["next_cursor"]}
+        else:
+            break
+    return results
+
+
+def _set_progress_bar(headers: dict, project_page_id: str, done: int, total: int) -> None:
+    progress = round(done / total * 100) if total > 0 else 0
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{project_page_id}",
+        headers=headers,
+        json={"properties": {"Progress Bar": {"number": progress}}},
+        timeout=30,
+    )
+    if r.status_code == 200:
+        print(f"✅ Progress Bar: {done}/{total} = {progress}%")
+    else:
+        print(f"❌ Failed to set Progress Bar: {r.text[:200]}")
+
+
 def update_project_progress(chat_id: str, task_page_id: str) -> None:
     """Recalculate and update Progress Bar on any Master Projects linked to this task."""
     from assistant_backend_1.helpers import load_users
@@ -333,24 +409,16 @@ def update_project_progress(chat_id: str, task_page_id: str) -> None:
     for ref in parent_refs:
         project_page_id = ref["id"]
         try:
-            r = requests.post(
-                f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
-                headers=headers,
-                json={"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}},
-                timeout=30,
+            results = _query_all_pages(
+                headers, tasks_db_id,
+                {"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}}
             )
-            results = r.json().get("results", [])
+            if results is None:
+                # API call failed — skip to avoid overwriting with 0
+                continue
             total = len(results)
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
-            progress = round(done / total * 100) if total > 0 else 0
-
-            requests.patch(
-                f"https://api.notion.com/v1/pages/{project_page_id}",
-                headers=headers,
-                json={"properties": {"Progress Bar": {"number": progress}}},
-                timeout=30,
-            )
-            print(f"✅ Progress Bar: {done}/{total} = {progress}% for project {project_page_id}")
+            _set_progress_bar(headers, project_page_id, done, total)
         except Exception as e:
             print(f"❌ Error updating progress for project {project_page_id}: {e}")
 
@@ -380,9 +448,7 @@ def sync_all_project_progress(chat_id: str) -> None:
     }
 
     try:
-        r = requests.post(f"https://api.notion.com/v1/databases/{master_db_id}/query",
-                          headers=headers, json={}, timeout=30)
-        projects = r.json().get("results", [])
+        projects = _query_all_pages(headers, master_db_id)
     except Exception as e:
         print(f"❌ Could not fetch projects for progress sync: {e}")
         return
@@ -390,24 +456,16 @@ def sync_all_project_progress(chat_id: str) -> None:
     for project in projects:
         project_page_id = project["id"]
         try:
-            r = requests.post(
-                f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
-                headers=headers,
-                json={"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}},
-                timeout=30,
+            results = _query_all_pages(
+                headers, tasks_db_id,
+                {"filter": {"property": "Parent Project", "relation": {"contains": project_page_id}}}
             )
-            results = r.json().get("results", [])
+            if not results and results != []:
+                # Failed query — skip, don't overwrite with 0
+                continue
             total = len(results)
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
-            progress = round(done / total * 100) if total > 0 else 0
-
-            requests.patch(
-                f"https://api.notion.com/v1/pages/{project_page_id}",
-                headers=headers,
-                json={"properties": {"Progress Bar": {"number": progress}}},
-                timeout=30,
-            )
-            print(f"✅ Progress sync: {done}/{total} = {progress}%")
+            _set_progress_bar(headers, project_page_id, done, total)
         except Exception as e:
             print(f"❌ Progress sync error for project {project_page_id}: {e}")
 
@@ -511,8 +569,8 @@ def delete_task_from_notion(chat_id: str, title: str) -> bool:
         return False
 
 
-def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_due: str = None) -> bool:
-    """Update title and/or due date of a matching task page in Notion."""
+def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_due: str = None, new_criticality: str = None) -> bool:
+    """Update title, due date, and/or priority of a matching task page in Notion."""
     token, database_id = get_user_notion_credentials(chat_id)
     if not token:
         return False
@@ -533,6 +591,9 @@ def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_d
         formatted_due = format_due_date_for_notion(new_due, token, database_id)
         if formatted_due:
             props[date_col] = {"date": {"start": formatted_due}}
+    valid_criticalities = {"P1 - Critical", "P2 - Important", "P3 - Minor"}
+    if new_criticality in valid_criticalities:
+        props["Criticality"] = {"select": {"name": new_criticality}}
 
     if not props:
         return True

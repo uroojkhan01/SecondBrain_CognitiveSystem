@@ -97,8 +97,9 @@ Your job is to:
 
 2. PROJECT DETECTION — identify which project each task belongs to.
    - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
-   - ONLY create a NEW project name if no existing project fits AND 2 or more new tasks clearly share one overarching goal.
-   - A single task can be linked to an existing project even on its own.
+   - ONLY create a NEW project name if no existing project fits AND 3 or more new tasks clearly share one overarching goal.
+   - Do NOT create a new project for fewer than 3 tasks — leave "projects" as an empty list for those tasks.
+   - A single task CAN still be linked to an existing project (from "existing_projects") even on its own.
    - Name new projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
 
 Return ONLY valid JSON — no markdown, no explanation:

@@ -776,6 +776,12 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
     for project in result.get("projects", []):
         project_name = project.get("name", "")
         is_existing = project.get("is_existing", False)
+        task_ids = project.get("task_ids", [])
+
+        # Hard rule: only create NEW projects when 3+ tasks are grouped together
+        if not is_existing and len(task_ids) < 3:
+            print(f"⏭️ Skipping new project '{project_name}' — only {len(task_ids)} task(s), need 3+")
+            continue
 
         if is_existing and project_name in existing_project_map:
             project_page_id = existing_project_map[project_name]
@@ -786,7 +792,7 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
                 continue
             print(f"✅ Project created: '{project_name}'")
 
-        linked_task_ids = project.get("task_ids", [])
+        linked_task_ids = task_ids
         for task_id in linked_task_ids:
             _link_task_to_project(token, task_id, project_page_id)
             task = task_map.get(task_id, {})

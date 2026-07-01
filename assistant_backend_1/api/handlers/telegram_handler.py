@@ -11,6 +11,24 @@ from assistant_backend_1.config import ENABLE_LLM_API
 # In-memory state for /done selection flow (chat_id → pending task list)
 _pending_done_tasks: dict[str, list] = {}
 
+# In-memory state for database selection flow (chat_id → selectable db list)
+_pending_db_selection: dict[str, list] = {}
+
+_DB_KEYWORDS = (
+    "database", "databases", "available db", "notion db", "which db",
+    "list db", "show db", "change db", "switch db", "my dbs",
+    "which database", "list databases", "show databases", "change database",
+    "switch database", "available databases", "what database",
+)
+
+
+def _build_db_list_message(selectable: list, active_id: str) -> str:
+    lines = []
+    for i, db in enumerate(selectable):
+        active_marker = " ✅ *(active)*" if db["id"] == active_id else ""
+        lines.append(f"{i+1}. {db['name']}{active_marker}")
+    return "Here are your connected Notion databases. Reply with a number to switch:\n\n" + "\n".join(lines)
+
 
 async def telegram_webhook(request: Request):
 
@@ -91,6 +109,19 @@ async def telegram_webhook(request: Request):
         await send_message(chat_id, "✅ All project pages have been updated with their areas and tasks!")
         return {"status": "ok"}
 
+    # /databases command — show list of authorized Notion databases
+    if user_input.strip().lower() in ("/databases", "/databases@secondbrainbot", "/dbs", "/dbs@secondbrainbot"):
+        current_users = load_users()
+        notion_data = current_users.get(str(chat_id), {}).get("notion", {})
+        active_id = notion_data.get("active_database_id", "")
+        selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
+        if not selectable:
+            await send_message(chat_id, "⚠️ No databases found. Please reconnect Notion.")
+            return {"status": "ok"}
+        _pending_db_selection[str(chat_id)] = selectable
+        await send_message(chat_id, _build_db_list_message(selectable, active_id))
+        return {"status": "ok"}
+
     # /done command — show numbered list of pending tasks from Notion
     if user_input.strip().lower() in ("/done", "/done@secondbrainbot", "/complete", "/complete@secondbrainbot"):
         from assistant_backend_1.features_services.notion import get_tasks_from_notion
@@ -131,22 +162,28 @@ async def telegram_webhook(request: Request):
                 await send_message(chat_id, f"✅ *{task['title']}* marked as done! Great work!")
                 return {"status": "ok"}
 
-        # Database digit selection
-        current_users = load_users()
-        user_data = current_users.get(str(chat_id), {})
-        notion_data = user_data.get("notion", {})
-        selectable = [db for db in notion_data.get(
-            "database_ids", []) if db.get("type") == "database"]
-        if selectable:
+        # Database digit selection (from /databases command or natural language trigger)
+        if str(chat_id) in _pending_db_selection:
+            selectable = _pending_db_selection[str(chat_id)]
             if 0 <= index < len(selectable):
                 selected_db = selectable[index]
-                notion_data["active_database_id"] = selected_db["id"]
+                del _pending_db_selection[str(chat_id)]
+                current_users = load_users()
+                current_users[str(chat_id)]["notion"]["active_database_id"] = selected_db["id"]
                 save_users(current_users)
-                await send_message(
-                    chat_id,
-                    f"✅ Active database set to: *{selected_db['name']}*"
-                )
+                await send_message(chat_id, f"✅ Active database switched to: *{selected_db['name']}*")
                 return {"status": "ok"}
+
+    # Natural language: user asking about their available databases
+    if any(kw in user_input.lower() for kw in _DB_KEYWORDS):
+        current_users = load_users()
+        notion_data = current_users.get(str(chat_id), {}).get("notion", {})
+        active_id = notion_data.get("active_database_id", "")
+        selectable = [db for db in notion_data.get("database_ids", []) if db.get("type") == "database"]
+        if selectable:
+            _pending_db_selection[str(chat_id)] = selectable
+            await send_message(chat_id, _build_db_list_message(selectable, active_id))
+            return {"status": "ok"}
 
     # Check Notion credentials and attachment status
     current_users = load_users()
