@@ -900,6 +900,9 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         return False
 
     # ── 0. Ensure schema fields and rollups are in place ─────────────
+    patch_missing_area_dbs(chat_id, token)
+    # Reload dbs in case patch_missing_area_dbs created new entries
+    dbs = load_users().get(str(chat_id), {}).get("second_brain", {}).get("databases", {})
     patch_tasks_organized_field(token, tasks_db_id)
     patch_done_and_rollups(token, tasks_db_id, master_db_id)
 
