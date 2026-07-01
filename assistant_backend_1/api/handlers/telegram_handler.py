@@ -78,6 +78,19 @@ async def telegram_webhook(request: Request):
             await send_message(chat_id, "❌ Task organizing failed or there was nothing to move. Check logs for details.")
         return {"status": "ok"}
 
+    # /refresh_projects command — populate project pages for all existing projects
+    if user_input.strip().lower() in ("/refresh_projects", "/refresh_projects@secondbrainbot"):
+        current_users = load_users()
+        token = current_users.get(str(chat_id), {}).get("notion", {}).get("token")
+        if not token:
+            await send_message(chat_id, "⚠️ Second Brain is not set up yet. Please connect Notion first.")
+            return {"status": "ok"}
+        await send_message(chat_id, "🔄 Refreshing project pages — this may take a moment...")
+        from assistant_backend_1.features_services.notion_project_details import populate_all_projects
+        await asyncio.to_thread(populate_all_projects, token, chat_id)
+        await send_message(chat_id, "✅ All project pages have been updated with their areas and tasks!")
+        return {"status": "ok"}
+
     # /done command — show numbered list of pending tasks from Notion
     if user_input.strip().lower() in ("/done", "/done@secondbrainbot", "/complete", "/complete@secondbrainbot"):
         from assistant_backend_1.features_services.notion import get_tasks_from_notion

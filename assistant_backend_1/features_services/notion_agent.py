@@ -16,6 +16,7 @@ AREA_DATABASES = [
     ("Career & Professional",      "💼"),
     ("Personal Growth & Learning", "🌱"),
     ("Home & Lifestyle",           "🏠"),
+    ("Family & Friends",           "🤝"),
 ]
 
 # Flat schema format (column_name → type string) used by get_active_database_schema / get_column_name
@@ -194,7 +195,8 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
 
     # Update flat schemas in notion.database_ids
     if success:
-        users[str(chat_id)].setdefault("notion", {"token": None, "active_database_id": None, "database_ids": []})
+        users[str(chat_id)].setdefault(
+            "notion", {"token": None, "active_database_id": None, "database_ids": []})
         database_ids = users[str(chat_id)]["notion"].get("database_ids", [])
         area_db_ids = set(dbs.get(k) for k in area_keys)
         for db in database_ids:
@@ -205,6 +207,71 @@ def patch_area_task_links(chat_id: str, token: str) -> bool:
         print("✅ user.json schemas updated with Parent Task Link")
 
     return success
+
+
+def patch_missing_area_dbs(chat_id: str, token: str) -> bool:
+    """
+    Creates any area databases that are in AREA_DATABASES but missing from user.json.
+    Safe to call on every startup — skips areas that already exist.
+    Useful when a new area is added to AREA_DATABASES after initial setup.
+    """
+    users = load_users()
+    second_brain = users.get(str(chat_id), {}).get("second_brain", {})
+    dbs = second_brain.get("databases", {})
+
+    areas_page_id = second_brain.get("areas_page_id")
+    tasks_db_id = dbs.get("tasks_todos")
+
+    if not areas_page_id:
+        print("❌ patch_missing_area_dbs: areas_page_id not found in user.json")
+        return False
+
+    added_any = False
+    for area_name, emoji in AREA_DATABASES:
+        key = _area_key(area_name)
+        if dbs.get(key):
+            continue  # already exists
+
+        print(f"➕ Creating missing area DB: '{area_name}'")
+        try:
+            db_id = _create_database(
+                token, areas_page_id, area_name, emoji, AREA_DB_PROPERTIES
+            )
+        except Exception as e:
+            print(f"❌ Failed to create '{area_name}': {e}")
+            return False
+
+        if tasks_db_id:
+            ok = _patch_task_link(token, db_id, tasks_db_id)
+            print(f"{'✅' if ok else '❌'} Parent Task Link patch: {area_name}")
+
+        # Update second_brain.databases
+        users[str(chat_id)]["second_brain"]["databases"][key] = db_id
+
+        # Update notion.database_ids list
+        notion = users[str(chat_id)].setdefault("notion", {
+            "token": token, "active_database_id": None, "database_ids": []
+        })
+        schema = dict(AREA_DB_FLAT_SCHEMA)
+        if tasks_db_id:
+            schema["Parent Task Link"] = "relation"
+        notion["database_ids"].append({
+            "id": db_id,
+            "name": area_name,
+            "type": "database",
+            "schema": schema,
+        })
+
+        print(f"✅ Area DB created and saved: '{area_name}' ({db_id})")
+        added_any = True
+
+    if added_any:
+        save_users(users)
+        print("✅ user.json updated with new area databases")
+    else:
+        print("ℹ️ All area databases already exist — nothing to create")
+
+    return True
 
 
 def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
@@ -218,7 +285,8 @@ def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
     if response.status_code == 200:
         print("✅ 'Organized' checkbox added to Tasks & To Dos DB")
         return True
-    print(f"❌ Failed to patch Tasks DB with Organized field: {response.json()}")
+    print(
+        f"❌ Failed to patch Tasks DB with Organized field: {response.json()}")
     return False
 
 
@@ -272,7 +340,8 @@ def _notion_search(token: str, query: str, filter_type: str) -> list:
     response = requests.post(
         f"{NOTION_API}/search",
         headers=_headers(token),
-        json={"query": query, "filter": {"property": "object", "value": filter_type}},
+        json={"query": query, "filter": {
+            "property": "object", "value": filter_type}},
         timeout=30,
     )
     return response.json().get("results", [])
@@ -290,14 +359,17 @@ def _search_notion_for_second_brain(token: str) -> dict | None:
     Search Notion for an existing Second Brain page and its databases.
     Returns a reconstruction dict on success, None if not found.
     """
-    root_id = _find_by_title(_notion_search(token, "Second Brain", "page"), "Second Brain")
+    root_id = _find_by_title(_notion_search(
+        token, "Second Brain", "page"), "Second Brain")
     if not root_id:
         return None
 
     print(f"🔍 Found existing Second Brain page: {root_id}")
 
-    areas_page_id = _find_by_title(_notion_search(token, "Areas Boards", "page"), "Areas Boards")
-    projects_page_id = _find_by_title(_notion_search(token, "Project Directory", "page"), "Project Directory")
+    areas_page_id = _find_by_title(_notion_search(
+        token, "Areas Boards", "page"), "Areas Boards")
+    projects_page_id = _find_by_title(_notion_search(
+        token, "Project Directory", "page"), "Project Directory")
 
     keyed_db_ids = {}
     for name, _ in AREA_DATABASES:
@@ -305,11 +377,13 @@ def _search_notion_for_second_brain(token: str) -> dict | None:
         if db_id:
             keyed_db_ids[_area_key(name)] = db_id
 
-    master_id = _find_by_title(_notion_search(token, "Master Projects DB", "database"), "Master Projects DB")
+    master_id = _find_by_title(_notion_search(
+        token, "Master Projects DB", "database"), "Master Projects DB")
     if master_id:
         keyed_db_ids["master_projects"] = master_id
 
-    tasks_id = _find_by_title(_notion_search(token, "Tasks and To Dos", "database"), "Tasks and To Dos")
+    tasks_id = _find_by_title(_notion_search(
+        token, "Tasks and To Dos", "database"), "Tasks and To Dos")
     if tasks_id:
         keyed_db_ids["tasks_todos"] = tasks_id
 
@@ -349,10 +423,13 @@ def setup_second_brain(chat_id: str, token: str) -> str:
     if existing.get("page_id") and _page_exists(token, existing["page_id"]):
         # Refresh token in user.json so it stays in sync with Postgres
         users.setdefault(str(chat_id), {})
-        users[str(chat_id)].setdefault("notion", {"token": token, "active_database_id": None, "database_ids": []})
+        users[str(chat_id)].setdefault(
+            "notion", {"token": token, "active_database_id": None, "database_ids": []})
         users[str(chat_id)]["notion"]["token"] = token
         save_users(users)
-        print(f"ℹ️ Second Brain already recorded in user.json for {chat_id}, skipping.")
+        print(
+            f"ℹ️ Second Brain already recorded in user.json for {chat_id}, skipping.")
+        patch_missing_area_dbs(chat_id, token)
         return "exists"
 
     # ── 0b. Search Notion for an existing Second Brain page ──────────
@@ -366,11 +443,14 @@ def setup_second_brain(chat_id: str, token: str) -> str:
         for name, _ in AREA_DATABASES:
             key = _area_key(name)
             if key in keyed_db_ids:
-                sb_database_list.append({"id": keyed_db_ids[key], "name": name, "type": "database", "schema": AREA_DB_FLAT_SCHEMA})
+                sb_database_list.append(
+                    {"id": keyed_db_ids[key], "name": name, "type": "database", "schema": AREA_DB_FLAT_SCHEMA})
         if "master_projects" in keyed_db_ids:
-            sb_database_list.append({"id": keyed_db_ids["master_projects"], "name": "Master Projects DB", "type": "database", "schema": MASTER_PROJECTS_FLAT_SCHEMA})
+            sb_database_list.append(
+                {"id": keyed_db_ids["master_projects"], "name": "Master Projects DB", "type": "database", "schema": MASTER_PROJECTS_FLAT_SCHEMA})
         if "tasks_todos" in keyed_db_ids:
-            sb_database_list.append({"id": keyed_db_ids["tasks_todos"], "name": "Tasks and To Dos", "type": "database", "schema": TASKS_FLAT_SCHEMA})
+            sb_database_list.append(
+                {"id": keyed_db_ids["tasks_todos"], "name": "Tasks and To Dos", "type": "database", "schema": TASKS_FLAT_SCHEMA})
 
         # Merge with existing OAuth database list (avoid duplicates)
         users.setdefault(str(chat_id), {})
@@ -381,10 +461,12 @@ def setup_second_brain(chat_id: str, token: str) -> str:
         })
         existing_list = users[str(chat_id)]["notion"].get("database_ids", [])
         existing_ids = {db["id"] for db in existing_list}
-        merged = existing_list + [db for db in sb_database_list if db["id"] not in existing_ids]
+        merged = existing_list + \
+            [db for db in sb_database_list if db["id"] not in existing_ids]
 
         users[str(chat_id)]["notion"]["database_ids"] = merged
-        users[str(chat_id)]["notion"]["active_database_id"] = keyed_db_ids.get("tasks_todos")
+        users[str(chat_id)]["notion"]["active_database_id"] = keyed_db_ids.get(
+            "tasks_todos")
         users[str(chat_id)]["second_brain"] = {
             "page_id": found["root_id"],
             "areas_page_id": found["areas_page_id"],
@@ -392,7 +474,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
             "databases": keyed_db_ids,
         }
         save_users(users)
-        print(f"✅ user.json reconstructed from existing Notion Second Brain for {chat_id}")
+        print(
+            f"✅ user.json reconstructed from existing Notion Second Brain for {chat_id}")
         return "exists"
 
     # ── 1. Root page ─────────────────────────────────────────────────
@@ -408,7 +491,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
 
     # ── 2. Areas Boards sub-page + 5 area databases ───────────────────
     try:
-        areas_page_id = _create_child_page(token, root_id, "Areas Boards", "🗂️")
+        areas_page_id = _create_child_page(
+            token, root_id, "Areas Boards", "🗂️")
         print(f"✅ Areas Boards page: {areas_page_id}")
     except Exception as e:
         print(f"❌ {e}")
@@ -416,7 +500,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
 
     for area_name, emoji in AREA_DATABASES:
         try:
-            db_id = _create_database(token, areas_page_id, area_name, emoji, AREA_DB_PROPERTIES)
+            db_id = _create_database(
+                token, areas_page_id, area_name, emoji, AREA_DB_PROPERTIES)
             keyed_db_ids[_area_key(area_name)] = db_id
             database_list.append({
                 "id": db_id,
@@ -431,7 +516,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
 
     # ── 3. Project Directory sub-page + Master Projects DB ───────────
     try:
-        projects_page_id = _create_child_page(token, root_id, "Project Directory", "🚀")
+        projects_page_id = _create_child_page(
+            token, root_id, "Project Directory", "🚀")
         print(f"✅ Project Directory page: {projects_page_id}")
     except Exception as e:
         print(f"❌ {e}")
@@ -477,7 +563,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
         "Done": {"checkbox": {}},
     }
     try:
-        tasks_id = _create_database(token, root_id, "Tasks and To Dos", "✅", tasks_properties)
+        tasks_id = _create_database(
+            token, root_id, "Tasks and To Dos", "✅", tasks_properties)
         keyed_db_ids["tasks_todos"] = tasks_id
         database_list.append({
             "id": tasks_id,
@@ -491,7 +578,8 @@ def setup_second_brain(chat_id: str, token: str) -> str:
         return "failed"
 
     # ── 5. Patch area DBs with Parent Task Link → Tasks & To Dos ─────
-    area_db_ids_list = [keyed_db_ids[_area_key(name)] for name, _ in AREA_DATABASES]
+    area_db_ids_list = [keyed_db_ids[_area_key(
+        name)] for name, _ in AREA_DATABASES]
     for area_db_id in area_db_ids_list:
         ok = _patch_task_link(token, area_db_id, tasks_id)
         print(f"{'✅' if ok else '❌'} Parent Task Link patch: {area_db_id}")
@@ -530,6 +618,7 @@ AREA_NAME_TO_KEY = {
     "Career & Professional":      "career_professional",
     "Personal Growth & Learning": "personal_growth_learning",
     "Home & Lifestyle":           "home_lifestyle",
+    "Family & Friends":           "family_friends",
 }
 
 _TASK_AGENT_PROMPT = """You are a Second Brain task organization agent.
@@ -545,7 +634,8 @@ Your job is to:
    - "Finance & Wealth": money, bills, payments, investments, banking, budget, salary, tax, expenses, savings
    - "Career & Professional": work, job, meetings, deadlines, clients, presentations, professional development, projects
    - "Personal Growth & Learning": learning, books, courses, skills, self-improvement, studying, reading, travel, trips, flights, hotels, booking holidays, experiences, visiting places
-   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, errands, family, shopping, cooking, furniture, kids, renovation, birthdays, celebrations
+   - "Home & Lifestyle": home, household, cleaning, repairs, groceries, shopping, cooking, furniture, renovation, errands
+   - "Family & Friends": family, friends, relationships, birthdays, anniversaries, gifts, celebrations, social plans, catching up, kids, parenting, partner, parents, siblings, relatives, weddings, gatherings
 
 2. PROJECT DETECTION — identify which project each task belongs to.
    - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
@@ -624,7 +714,8 @@ def _fetch_existing_projects(token: str, master_db_id: str) -> list:
             for prop in props.values():
                 if prop.get("type") == "title":
                     title_parts = prop.get("title", [])
-                    name = "".join(t.get("plain_text", "") for t in title_parts).strip()
+                    name = "".join(t.get("plain_text", "")
+                                   for t in title_parts).strip()
                     if name:
                         names.append({"name": name, "page_id": page["id"]})
                     break
@@ -801,8 +892,8 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
     second_brain = users.get(str(chat_id), {}).get("second_brain", {})
     dbs = second_brain.get("databases", {})
 
-    tasks_db_id   = dbs.get("tasks_todos")
-    master_db_id  = dbs.get("master_projects")
+    tasks_db_id = dbs.get("tasks_todos")
+    master_db_id = dbs.get("master_projects")
 
     if not tasks_db_id or not master_db_id:
         print("❌ Second Brain databases not found in user.json. Run setup first.")
@@ -868,7 +959,8 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
             project_page_id = existing_project_map[project_name]
             print(f"🔗 Linking to existing project: '{project_name}'")
         else:
-            project_page_id = _create_project_entry(token, master_db_id, project)
+            project_page_id = _create_project_entry(
+                token, master_db_id, project)
             if not project_page_id:
                 continue
             print(f"✅ Project created: '{project_name}'")
@@ -883,6 +975,10 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
         if linked_task_ids:
             from assistant_backend_1.features_services.notion import update_project_progress
             update_project_progress(chat_id, linked_task_ids[0])
+
+        # Populate / refresh the project page template
+        from assistant_backend_1.features_services.notion_project_details import populate_project_page
+        populate_project_page(token, chat_id, project_page_id)
 
     print("🎉 Task moving agent complete.")
     return True
