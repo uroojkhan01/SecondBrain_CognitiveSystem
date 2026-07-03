@@ -41,6 +41,8 @@ MASTER_PROJECTS_FLAT_SCHEMA = {
     "Status":          "select",
     "Target Deadline": "date",
     "Progress Bar":    "number",
+    "Created Date":    "date",
+    "Comments":        "rich_text",
 }
 
 TASKS_FLAT_SCHEMA = {
@@ -74,7 +76,9 @@ MASTER_PROJECTS_PROPERTIES = {
         }
     },
     "Target Deadline": {"date": {}},
-    # Progress Bar is a plain Number added programmatically — not here
+    "Progress Bar":    {"number": {}},
+    "Created Date":    {"date": {}},
+    "Comments":        {"rich_text": {}},
 }
 
 # ── Task agent prompt ──────────────────────────────────────────────────────────
@@ -97,8 +101,9 @@ Your job is to:
 
 2. PROJECT DETECTION — identify which project each task belongs to.
    - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
-   - ONLY create a NEW project name if no existing project fits AND 2 or more new tasks clearly share one overarching goal.
+   - ONLY create a NEW project name if no existing project fits AND 5 or more new tasks clearly share one overarching goal.
    - A single task can be linked to an existing project even on its own.
+   - For NEW projects, suggest a realistic deadline (ISO date YYYY-MM-DD) based on the complexity and nature of the tasks.
    - Name new projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
 
 Return ONLY valid JSON — no markdown, no explanation:
@@ -115,7 +120,9 @@ Return ONLY valid JSON — no markdown, no explanation:
     {
       "name": "<Project Name — use exact existing name if applicable>",
       "is_existing": true,
-      "status": "Proposed",
+      "status": "Active",
+      "description": "<one sentence describing what this project is about>",
+      "suggested_deadline": "<YYYY-MM-DD for new projects, null for existing>",
       "task_ids": ["<task_page_id>"]
     }
   ]

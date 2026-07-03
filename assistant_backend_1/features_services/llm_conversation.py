@@ -107,6 +107,12 @@ def handle_brain_dump(chat_id: str, items: list):
             )
 
 
+def _save_context(chat_id: str, llm_response: LLMResponse, fallback_summary: str = ""):
+    """Save memory + entities when the primary intent isn't save_memory but entities were extracted."""
+    if llm_response.entities or llm_response.memory_summary:
+        save_memory(chat_id, llm_response.memory_summary or fallback_summary, llm_response.entities)
+
+
 def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
     """Route LLM response to correct save function based on intent."""
 
@@ -139,6 +145,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 save_reminder(chat_id, text, remind_at)
                 hook_save_reminder(chat_id, text, remind_at=remind_at)
                 save_task_to_notion(chat_id, text, remind_at, criticality=None)
+                _save_context(chat_id, llm_response, text)
             else:
                 print(
                     f"⏳ Reminder incomplete (missing {'datetime' if not remind_at else 'text'}) — waiting for more info.")
@@ -205,6 +212,7 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
             save_task(chat_id, title, due)
             save_task_to_notion(chat_id, title, due, criticality)
             hook_save_task(chat_id, title, due_date=due)
+            _save_context(chat_id, llm_response, title)
 
     elif intent == "delete_task":
         if llm_response.task:

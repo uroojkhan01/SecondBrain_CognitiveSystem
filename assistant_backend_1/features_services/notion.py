@@ -344,10 +344,13 @@ def update_project_progress(chat_id: str, task_page_id: str) -> None:
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
             progress = round(done / total * 100) if total > 0 else 0
 
+            props = {"Progress Bar": {"number": progress}}
+            if progress == 100:
+                props["Status"] = {"select": {"name": "Completed"}}
             requests.patch(
                 f"https://api.notion.com/v1/pages/{project_page_id}",
                 headers=headers,
-                json={"properties": {"Progress Bar": {"number": progress}}},
+                json={"properties": props},
                 timeout=30,
             )
             print(f"✅ Progress Bar: {done}/{total} = {progress}% for project {project_page_id}")
@@ -401,10 +404,13 @@ def sync_all_project_progress(chat_id: str) -> None:
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
             progress = round(done / total * 100) if total > 0 else 0
 
+            props = {"Progress Bar": {"number": progress}}
+            if progress == 100:
+                props["Status"] = {"select": {"name": "Completed"}}
             requests.patch(
                 f"https://api.notion.com/v1/pages/{project_page_id}",
                 headers=headers,
-                json={"properties": {"Progress Bar": {"number": progress}}},
+                json={"properties": props},
                 timeout=30,
             )
             print(f"✅ Progress sync: {done}/{total} = {progress}%")

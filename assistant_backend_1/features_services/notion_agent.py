@@ -16,6 +16,21 @@ NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
 
+# ── Telegram helper ───────────────────────────────────────────────────────────
+
+def _notify_telegram(chat_id: str, message: str):
+    """Send a Telegram message from within notion_agent (no async context needed)."""
+    from assistant_backend_1.config import TELEGRAM_BOT_TOKEN
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"❌ Telegram notify failed: {e}")
+
+
 # ── Notion API primitives ──────────────────────────────────────────────────────
 
 def _headers(token: str) -> dict:
@@ -223,6 +238,25 @@ def patch_missing_area_dbs(chat_id: str, token: str) -> bool:
     else:
         print("ℹ️ All area databases already exist — nothing to create")
 
+    return True
+
+
+def patch_master_projects_schema(token: str, master_db_id: str) -> bool:
+    """Ensure Master Projects DB has all required properties (idempotent — Notion ignores duplicates)."""
+    r = requests.patch(
+        f"{NOTION_API}/databases/{master_db_id}",
+        headers=_headers(token),
+        json={"properties": {
+            "Progress Bar": {"number": {}},
+            "Created Date":  {"date": {}},
+            "Comments":      {"rich_text": {}},
+        }},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"❌ Failed to patch Master Projects schema: {r.json()}")
+        return False
+    print("✅ Master Projects schema up to date")
     return True
 
 
@@ -656,16 +690,22 @@ def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str)
 
 def _create_project_entry(token: str, master_db_id: str, project: dict) -> str | None:
     """Create a new project entry in Master Projects DB."""
+    props = {
+        "Project Name": {"title": [{"text": {"content": project["name"]}}]},
+        "Status":       {"select": {"name": project.get("status", "Active")}},
+        "Created Date": {"date": {"start": date.today().isoformat()}},
+    }
+    description = project.get("description", "")
+    if description:
+        props["Comments"] = {"rich_text": [{"text": {"content": description}}]}
+    deadline = project.get("suggested_deadline")
+    if deadline:
+        props["Target Deadline"] = {"date": {"start": deadline}}
+
     response = requests.post(
         f"{NOTION_API}/pages",
         headers=_headers(token),
-        json={
-            "parent": {"database_id": master_db_id},
-            "properties": {
-                "Project Name": {"title": [{"text": {"content": project["name"]}}]},
-                "Status":       {"select": {"name": project.get("status", "Proposed")}},
-            },
-        },
+        json={"parent": {"database_id": master_db_id}, "properties": props},
         timeout=30,
     )
     if response.status_code == 200:
@@ -725,6 +765,7 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
     dbs = load_users().get(str(chat_id), {}).get("second_brain", {}).get("databases", {})
     patch_tasks_organized_field(token, tasks_db_id)
     patch_done_and_rollups(token, tasks_db_id, master_db_id)
+    patch_master_projects_schema(token, master_db_id)
 
     # ── 1. Fetch unorganized tasks ────────────────────────────────────
     tasks = _fetch_tasks(token, tasks_db_id)
@@ -773,31 +814,68 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
             _mark_task_organized(token, task_id)
 
     # ── 5. Link tasks to projects ─────────────────────────────────────
+    users = load_users()
+    pending = users.get(str(chat_id), {}).get("pending_projects", {})
+
     for project in result.get("projects", []):
         project_name = project.get("name", "")
         is_existing = project.get("is_existing", False)
+        new_task_ids = project.get("task_ids", [])
+        project_page_id = None
+        task_ids_to_link = []
 
         if is_existing and project_name in existing_project_map:
+            # Existing project — link immediately, no threshold
             project_page_id = existing_project_map[project_name]
+            task_ids_to_link = new_task_ids
             print(f"🔗 Linking to existing project: '{project_name}'")
         else:
+            # New project — accumulate until 5 tasks
+            prior = pending.get(project_name, {})
+            accumulated_ids = list(dict.fromkeys(prior.get("task_ids", []) + new_task_ids))
+
+            if len(accumulated_ids) < 5:
+                pending[project_name] = {
+                    "task_ids": accumulated_ids,
+                    "description": project.get("description") or prior.get("description", ""),
+                    "suggested_deadline": project.get("suggested_deadline") or prior.get("suggested_deadline"),
+                }
+                print(f"ℹ️ Project '{project_name}' pending ({len(accumulated_ids)}/5 tasks)")
+                continue
+
+            # Hit threshold — create the project
+            project["task_ids"] = accumulated_ids
             project_page_id = _create_project_entry(token, master_db_id, project)
             if not project_page_id:
                 continue
-            print(f"✅ Project created: '{project_name}'")
+            task_ids_to_link = accumulated_ids
+            pending.pop(project_name, None)
 
-        linked_task_ids = project.get("task_ids", [])
-        for task_id in linked_task_ids:
+            deadline_display = project.get("suggested_deadline") or "no deadline set"
+            _notify_telegram(
+                chat_id,
+                f"🚀 *New Project Created!*\n\n"
+                f"*{project_name}* is taking shape — created with suggested deadline *{deadline_display}*.\n"
+                f"Change it in Notion anytime if it doesn't work for you!"
+            )
+            print(f"✅ Project created at 5-task threshold: '{project_name}'")
+
+        for task_id in task_ids_to_link:
             _link_task_to_project(token, task_id, project_page_id)
             task = task_map.get(task_id, {})
             print(f"   🔗 Linked task: '{task.get('title', task_id)}'")
 
-        if linked_task_ids:
+        if task_ids_to_link:
             from assistant_backend_1.features_services.notion import update_project_progress
-            update_project_progress(chat_id, linked_task_ids[0])
+            update_project_progress(chat_id, task_ids_to_link[0])
 
         from assistant_backend_1.features_services.notion_project_details import populate_project_page
         populate_project_page(token, chat_id, project_page_id)
+
+    # Save pending projects back to user.json
+    users = load_users()
+    users.setdefault(str(chat_id), {})["pending_projects"] = pending
+    save_users(users)
 
     print("🎉 Task moving agent complete.")
     return True
