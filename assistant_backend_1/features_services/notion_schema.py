@@ -76,7 +76,7 @@ MASTER_PROJECTS_PROPERTIES = {
         }
     },
     "Target Deadline": {"date": {}},
-    "Progress Bar":    {"number": {"format": "bar"}},
+    "Progress Bar":    {"number": {}},
     "Created Date":    {"date": {}},
     "Comments":        {"rich_text": {}},
 }
