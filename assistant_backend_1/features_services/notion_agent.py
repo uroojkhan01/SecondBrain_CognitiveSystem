@@ -260,6 +260,38 @@ def patch_master_projects_schema(token: str, master_db_id: str) -> bool:
     return True
 
 
+def patch_area_criticality(chat_id: str, token: str) -> None:
+    """Add Criticality select to all existing Area DBs (idempotent)."""
+    users = load_users()
+    dbs = users.get(str(chat_id), {}).get("second_brain", {}).get("databases", {})
+    criticality_schema = {
+        "Criticality": {
+            "select": {
+                "options": [
+                    {"name": "P1 - Critical",  "color": "red"},
+                    {"name": "P2 - Important", "color": "yellow"},
+                    {"name": "P3 - Minor",     "color": "blue"},
+                ]
+            }
+        }
+    }
+    for area_name, _ in AREA_DATABASES:
+        key = _area_key(area_name)
+        db_id = dbs.get(key)
+        if not db_id:
+            continue
+        r = requests.patch(
+            f"{NOTION_API}/databases/{db_id}",
+            headers=_headers(token),
+            json={"properties": criticality_schema},
+            timeout=30,
+        )
+        if r.status_code == 200:
+            print(f"✅ Criticality added to Area DB: {area_name}")
+        else:
+            print(f"❌ Failed to add Criticality to {area_name}: {r.json()}")
+
+
 def patch_tasks_organized_field(token: str, tasks_db_id: str) -> bool:
     """Add the 'Organized' checkbox to the Tasks & To Dos database."""
     response = requests.patch(
@@ -572,7 +604,9 @@ def _fetch_tasks(token: str, tasks_db_id: str) -> list:
                     tl = prop_data.get("title", [])
                     title = tl[0].get("plain_text", "").strip() if tl else ""
                     break
-            tasks.append({"id": r["id"], "title": title})
+            crit_select = props.get("Criticality", {}).get("select") or {}
+            criticality = crit_select.get("name")
+            tasks.append({"id": r["id"], "title": title, "criticality": criticality})
         if data.get("has_more"):
             payload["start_cursor"] = data["next_cursor"]
         else:
@@ -668,18 +702,19 @@ def _call_task_agent(tasks: list, existing_projects: list = None) -> dict | None
 
 def _create_area_entry(token: str, area_db_id: str, task: dict, ai_summary: str) -> str | None:
     """Create an entry in an area database linked back to the original task."""
+    props = {
+        "Name":                 {"title": [{"text": {"content": task["title"]}}]},
+        "Date Logged":          {"date": {"start": date.today().isoformat()}},
+        "AI Executive Summary": {"rich_text": [{"text": {"content": ai_summary}}]},
+        "Parent Task Link":     {"relation": [{"id": task["id"]}]},
+    }
+    if task.get("criticality"):
+        props["Criticality"] = {"select": {"name": task["criticality"]}}
+
     response = requests.post(
         f"{NOTION_API}/pages",
         headers=_headers(token),
-        json={
-            "parent": {"database_id": area_db_id},
-            "properties": {
-                "Name":                 {"title": [{"text": {"content": task["title"]}}]},
-                "Date Logged":          {"date": {"start": date.today().isoformat()}},
-                "AI Executive Summary": {"rich_text": [{"text": {"content": ai_summary}}]},
-                "Parent Task Link":     {"relation": [{"id": task["id"]}]},
-            },
-        },
+        json={"parent": {"database_id": area_db_id}, "properties": props},
         timeout=30,
     )
     if response.status_code == 200:
@@ -766,6 +801,7 @@ def run_notion_task_moving(chat_id: str, token: str) -> bool:
     patch_tasks_organized_field(token, tasks_db_id)
     patch_done_and_rollups(token, tasks_db_id, master_db_id)
     patch_master_projects_schema(token, master_db_id)
+    patch_area_criticality(chat_id, token)
 
     # ── 1. Fetch unorganized tasks ────────────────────────────────────
     tasks = _fetch_tasks(token, tasks_db_id)

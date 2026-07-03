@@ -34,6 +34,7 @@ AREA_DB_FLAT_SCHEMA = {
     "Date Logged":          "date",
     "AI Executive Summary": "rich_text",
     "Parent Task Link":     "relation",
+    "Criticality":          "select",
 }
 
 MASTER_PROJECTS_FLAT_SCHEMA = {
@@ -60,6 +61,15 @@ AREA_DB_PROPERTIES = {
     "Name":                 {"title": {}},
     "Date Logged":          {"date": {}},
     "AI Executive Summary": {"rich_text": {}},
+    "Criticality": {
+        "select": {
+            "options": [
+                {"name": "P1 - Critical",  "color": "red"},
+                {"name": "P2 - Important", "color": "yellow"},
+                {"name": "P3 - Minor",     "color": "blue"},
+            ]
+        }
+    },
     # Parent Task Link is patched in separately after Tasks DB exists
 }
 
