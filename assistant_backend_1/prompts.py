@@ -98,15 +98,19 @@ Classify the user message into one of these intents:
                     "drop the gym task"
                     → populate task.title with the task being deleted
 
-- "update_task"   → user wants to change the title or due date of an existing task. Examples:
+- "update_task"   → user wants to change the title, due date, or priority of an existing task. Examples:
                     "change call Ahmed task to call Sara"
                     "reschedule the report task to Friday"
                     "move the gym task to tomorrow"
                     "update the dentist task title to dentist checkup"
                     "push the grocery task to next week"
+                    "change the Rome trip task priority to high"
+                    "make the doctor appointment critical"
+                    "set the gym task to low priority"
                     → populate task.title with the ORIGINAL task title,
                       task.new_title if the title is changing,
-                      task.due if the date is changing
+                      task.due if the date is changing,
+                      task.criticality if the priority is changing (one of: "P1 - Critical", "P2 - Important", "P3 - Minor")
 
 - "create_task"   → user wants to do something / add to their to-do list.
                     This includes ANY action the user needs to take in the future,
@@ -184,6 +188,14 @@ Classify the user message into one of these intents:
                     "I took my medicine" → mark_done IF medicine reminder exists
                     "I picked up my son" → mark_done IF pickup task exists, else save_memory
                     If no matching task exists → "save_memory" instead
+
+- "mark_undone"   → user marked a task done by mistake and wants to revert it. Examples:
+                    "undo the gym task"
+                    "I didn't actually finish the report"
+                    "mark the doctor task as not done"
+                    "uncheck buy groceries"
+                    "I accidentally marked the Rome trip task as complete"
+                    → populate task.title with the task to revert
 
 - "daily_brief"   → user wants overview of their day. Examples:
                     "what do I have today?"
