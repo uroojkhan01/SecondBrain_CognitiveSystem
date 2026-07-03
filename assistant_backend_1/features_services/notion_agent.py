@@ -247,7 +247,7 @@ def patch_master_projects_schema(token: str, master_db_id: str) -> bool:
         f"{NOTION_API}/databases/{master_db_id}",
         headers=_headers(token),
         json={"properties": {
-            "Progress Bar": {"number": {}},
+            "Progress Bar": {"number": {"format": "bar"}},
             "Created Date":  {"date": {}},
             "Comments":      {"rich_text": {}},
         }},
