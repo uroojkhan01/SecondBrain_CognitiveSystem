@@ -209,6 +209,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
     elif intent == "create_task":
         if llm_response.task:
             title = llm_response.task.get("title")
+            if not title:
+                return
             due = llm_response.task.get("due")
             criticality = llm_response.task.get("criticality")
             save_task(chat_id, title, due)
@@ -269,6 +271,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
     elif intent == "mark_done":
         if llm_response.task:
             title = llm_response.task.get("title")
+            if not title:
+                return
             mark_task_done(chat_id, title)
             mark_reminder_done(chat_id, title)
             hook_mark_task_done(chat_id, title)
@@ -277,6 +281,8 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
     elif intent == "mark_undone":
         if llm_response.task:
             title = llm_response.task.get("title")
+            if not title:
+                return
             mark_task_pending(chat_id, title)
             mark_task_undone_in_notion(chat_id, title)
 

@@ -282,6 +282,7 @@ Rules:
     Never write vague summaries like "user shared something" or "user mentioned a person"
 - entities should only contain items with real proper names (Zain, Dr. Sara, Paris)
   NOT generic relation words (son, friend, doctor) — those go in memory_summary only
+- CRITICAL: if an entity has no real proper name, do NOT include it in entities at all. Never set "name" to null — omit the entity entirely instead
 - If something is not applicable, set it to null
 - If the message is unclear but contains ANY personal content → use "save_memory" and fill follow_up_question to get more info. NEVER use "conversation" for messages with personal content — data would be lost.
 - If the message is completely empty of personal content (just "hmm", "ok", pure filler) → then use "conversation"

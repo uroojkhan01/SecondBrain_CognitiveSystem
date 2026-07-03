@@ -99,7 +99,7 @@ def save_memory(chat_id: str, summary: str, entities: list) -> str:
 
         # Process entities — create nodes and link memories to them
         for entity in entities:
-            name = entity.get("name", "").strip()
+            name = (entity.get("name") or "").strip()
             entity_type = entity.get("type", "person").lower()
             relation = entity.get("relation", "")
 
@@ -270,7 +270,7 @@ def update_entity(chat_id: str, entities: list):
     """
     with get_session() as session:
         for entity in entities:
-            name = entity.get("name", "").strip()
+            name = (entity.get("name") or "").strip()
             if not name or name.lower() in GENERIC_WORDS:
                 continue
 
