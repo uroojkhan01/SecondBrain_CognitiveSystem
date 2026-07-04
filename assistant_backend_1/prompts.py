@@ -189,6 +189,16 @@ Classify the user message into one of these intents:
                     "I picked up my son" → mark_done IF pickup task exists, else save_memory
                     If no matching task exists → "save_memory" instead
 
+- "update_project" → user wants to update the deadline or status of a project in Master Projects DB. Examples:
+                    "set the Rome Trip 2026 deadline to end of October"
+                    "push the Home Renovation deadline to December"
+                    "mark the Job Search project as completed"
+                    "the wedding project is now paused"
+                    "change Rome Trip target to September 30"
+                    → populate task.title with the project name,
+                      task.due if the deadline is changing (YYYY-MM-DD),
+                      task.status if the status is changing (one of: "Proposed", "Active", "Paused", "Completed")
+
 - "mark_undone"   → user marked a task done by mistake and wants to revert it. Examples:
                     "undo the gym task"
                     "I didn't actually finish the report"
@@ -304,6 +314,9 @@ Rules:
   P3 - Minor: "want to", "someday", "maybe", "would like to", no deadline, low-stakes errands,
               nice-to-haves, organisational tasks with no urgency
   When uncertain, default to P2 - Important.
+- CRITICAL: "update project", "change project deadline", "set deadline for", "mark project as", "project status" → ALWAYS "update_project"
+  → populate task.title with the project name. Fill task.due ONLY if deadline is changing. Fill task.status ONLY if status is changing.
+  reply_to_user should warmly confirm. Example: "Done! I've updated the Rome Trip deadline. ✅"
 - CRITICAL: "delete", "remove", "cancel", "drop" + task/to-do → ALWAYS "delete_task"
   → populate task.title with the task being deleted. Set all other fields to null.
   reply_to_user should warmly confirm deletion. Example: "Got it! I've removed that task. ✅"

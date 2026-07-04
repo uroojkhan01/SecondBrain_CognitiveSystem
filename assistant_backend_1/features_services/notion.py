@@ -422,6 +422,11 @@ def update_project_progress(chat_id: str, task_page_id: str) -> None:
             total = len(results)
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
             _set_progress_bar(headers, project_page_id, done, total)
+            try:
+                from assistant_backend_1.features_services.notion_project_details import populate_project_page
+                populate_project_page(token, chat_id, project_page_id)
+            except Exception as e:
+                print(f"⚠️ Could not refresh project page callout: {e}")
         except Exception as e:
             print(f"❌ Error updating progress for project {project_page_id}: {e}")
 
@@ -469,6 +474,11 @@ def sync_all_project_progress(chat_id: str) -> None:
             total = len(results)
             done = sum(1 for t in results if t.get("properties", {}).get("Done", {}).get("checkbox", False))
             _set_progress_bar(headers, project_page_id, done, total)
+            try:
+                from assistant_backend_1.features_services.notion_project_details import populate_project_page
+                populate_project_page(token, chat_id, project_page_id)
+            except Exception as e:
+                print(f"⚠️ Could not refresh project page callout during sync: {e}")
         except Exception as e:
             print(f"❌ Progress sync error for project {project_page_id}: {e}")
 
@@ -572,6 +582,67 @@ def delete_task_from_notion(chat_id: str, title: str) -> bool:
     except Exception as e:
         print(f"❌ Error deleting task from Notion: {e}")
         return False
+
+
+def update_project_in_notion(chat_id: str, project_name: str, new_deadline: str = None, new_status: str = None) -> bool:
+    """Find a project in Master Projects DB by name and update its deadline and/or status."""
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    user_data = users.get(str(chat_id), {})
+    token = user_data.get("notion", {}).get("token")
+    master_db_id = user_data.get("second_brain", {}).get("databases", {}).get("master_projects")
+
+    if not token or not master_db_id:
+        print(f"⚠️ No Master Projects DB credentials for {chat_id}")
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    results = _query_all_pages(headers, master_db_id, {})
+    if results is None:
+        return False
+
+    project_page_id = None
+    for page in results:
+        for prop in page.get("properties", {}).values():
+            if prop.get("type") == "title":
+                title_parts = prop.get("title", [])
+                name = "".join(t.get("plain_text", "") for t in title_parts).strip()
+                if project_name.lower() in name.lower() or name.lower() in project_name.lower():
+                    project_page_id = page["id"]
+                    break
+        if project_page_id:
+            break
+
+    if not project_page_id:
+        print(f"⚠️ Project '{project_name}' not found in Master Projects DB")
+        return False
+
+    props = {}
+    if new_deadline:
+        props["Target Deadline"] = {"date": {"start": new_deadline}}
+    valid_statuses = {"Proposed", "Active", "Paused", "Completed"}
+    if new_status and new_status in valid_statuses:
+        props["Status"] = {"select": {"name": new_status}}
+
+    if not props:
+        return True
+
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{project_page_id}",
+        headers=headers,
+        json={"properties": props},
+        timeout=30,
+    )
+    if r.status_code == 200:
+        print(f"✅ Project '{project_name}' updated in Notion")
+        return True
+    print(f"❌ Failed to update project '{project_name}': {r.json()}")
+    return False
 
 
 def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_due: str = None, new_criticality: str = None) -> bool:

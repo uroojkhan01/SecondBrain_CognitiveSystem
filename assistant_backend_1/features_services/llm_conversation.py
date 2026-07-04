@@ -24,6 +24,7 @@ from assistant_backend_1.features_services.notion import (
     save_task_to_notion,
     delete_task_from_notion,
     update_task_in_notion,
+    update_project_in_notion,
     save_reminder_to_notion,
     mark_task_done_in_notion,
     mark_task_undone_in_notion,
@@ -285,6 +286,14 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
                 return
             mark_task_pending(chat_id, title)
             mark_task_undone_in_notion(chat_id, title)
+
+    elif intent == "update_project":
+        if llm_response.task:
+            project_name = llm_response.task.get("title", "")
+            new_deadline = llm_response.task.get("due")
+            new_status = llm_response.task.get("status")
+            if project_name:
+                update_project_in_notion(chat_id, project_name, new_deadline, new_status)
 
     elif intent == "update_memory":
         if llm_response.entities:
