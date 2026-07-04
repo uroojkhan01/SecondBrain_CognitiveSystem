@@ -207,7 +207,7 @@ def start_reminder_scheduler():
         f"Overdue: every 12 h | "
         f"Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min | "
         f"Progress sync: every 10 min | "
-        f"Daily summary: 14:15 Europe/Berlin"
+        f"Daily summary: 22:00 Europe/Berlin"
     )
 
     # Run all jobs once immediately on startup (daily summary excluded — time-triggered only)
@@ -220,7 +220,7 @@ def start_reminder_scheduler():
     schedule.every(12).hours.do(mark_overdue_tasks_done)
     schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
     schedule.every(10).minutes.do(sync_progress_bars_for_all_users)
-    schedule.every().day.at("14:15", "Europe/Berlin").do(send_daily_task_summary)
+    schedule.every().day.at("22:00", "Europe/Berlin").do(send_daily_task_summary)
 
     while True:
         schedule.run_pending()
