@@ -9,6 +9,7 @@ Schedule:
   - Overdue task mark:  every 12 hours
   - Task moving agent:  every 30 min
   - Progress bar sync:  every 10 min
+  - Daily task summary: 22:00 Europe/Berlin
 """
 
 import time
@@ -153,6 +154,49 @@ def run_task_moving_for_all_users():
             print(f"❌ Task moving failed for user {chat_id}: {e}")
 
 
+_CRITICALITY_ORDER = {
+    "P1 - Critical":  0,
+    "P2 - Important": 1,
+    "P3 - Minor":     2,
+}
+
+
+def send_daily_task_summary():
+    """Send each user their pending undone tasks sorted by criticality at 22:00 Berlin."""
+    from assistant_backend_1.features_services.notion import get_tasks_from_notion
+
+    print(f"\n🌙 Running daily task summary at {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    users = load_users()
+
+    for chat_id, user_data in users.items():
+        if not user_data.get("second_brain", {}).get("databases", {}).get("tasks_todos"):
+            continue
+        try:
+            tasks = get_tasks_from_notion(chat_id)
+            if not tasks:
+                _send_telegram(chat_id, "🌙 *End of Day*\n\n✅ You have no pending tasks. Great work today!")
+                continue
+
+            tasks.sort(key=lambda t: _CRITICALITY_ORDER.get(t.get("criticality"), 3))
+
+            lines = []
+            for t in tasks:
+                crit = t.get("criticality") or "No priority"
+                due_str = f"  _(due {t['due'][:10]})_" if t.get("due") else ""
+                lines.append(f"• *{t['title']}* [{crit}]{due_str}")
+
+            message = (
+                f"🌙 *End of Day Summary*\n\n"
+                f"You have *{len(tasks)}* pending task(s):\n\n"
+                + "\n".join(lines)
+                + "\n\nHave a good rest! 💤"
+            )
+            _send_telegram(chat_id, message)
+            print(f"✅ Daily summary sent to {chat_id}: {len(tasks)} tasks")
+        except Exception as e:
+            print(f"❌ Daily summary failed for {chat_id}: {e}")
+
+
 # ── Scheduler entry point ──────────────────────────────────────────────────────
 
 def start_reminder_scheduler():
@@ -162,10 +206,11 @@ def start_reminder_scheduler():
         f"⏱  Reminders: every {CHECK_INTERVAL_MINUTES} min | "
         f"Overdue: every 12 h | "
         f"Task moving: every {TASK_MOVING_INTERVAL_MINUTES} min | "
-        f"Progress sync: every 10 min"
+        f"Progress sync: every 10 min | "
+        f"Daily summary: 14:15 Europe/Berlin"
     )
 
-    # Run all jobs once immediately on startup
+    # Run all jobs once immediately on startup (daily summary excluded — time-triggered only)
     check_and_remind()
     mark_overdue_tasks_done()
     run_task_moving_for_all_users()
@@ -173,9 +218,9 @@ def start_reminder_scheduler():
 
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_and_remind)
     schedule.every(12).hours.do(mark_overdue_tasks_done)
-    schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(
-        run_task_moving_for_all_users)
+    schedule.every(TASK_MOVING_INTERVAL_MINUTES).minutes.do(run_task_moving_for_all_users)
     schedule.every(10).minutes.do(sync_progress_bars_for_all_users)
+    schedule.every().day.at("14:15", "Europe/Berlin").do(send_daily_task_summary)
 
     while True:
         schedule.run_pending()

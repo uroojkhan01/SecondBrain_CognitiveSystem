@@ -641,11 +641,16 @@ def _fetch_existing_projects(token: str, master_db_id: str) -> list:
 
 def _call_task_agent(tasks: list, existing_projects: list = None) -> dict | None:
     """Send tasks to Groq (Claude fallback) for area + project categorization."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
     payload = {
         "tasks": tasks,
         "existing_projects": [p["name"] for p in (existing_projects or [])]
     }
-    user_prompt = f"Analyse these tasks and return the JSON:\n{json.dumps(payload, indent=2)}"
+    user_prompt = (
+        f"Today's date is {today}. "
+        f"Analyse these tasks and return the JSON:\n{json.dumps(payload, indent=2)}"
+    )
     raw = None
 
     for api_key in GROQ_API_KEYS:

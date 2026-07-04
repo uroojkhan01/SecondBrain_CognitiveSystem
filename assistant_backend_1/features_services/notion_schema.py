@@ -113,7 +113,11 @@ Your job is to:
    - FIRST check if the task fits an existing project from "existing_projects". If it does, use that EXACT project name.
    - ONLY create a NEW project name if no existing project fits AND 5 or more new tasks clearly share one overarching goal.
    - A single task can be linked to an existing project even on its own.
-   - For NEW projects, suggest a realistic deadline (ISO date YYYY-MM-DD) based on the complexity and nature of the tasks.
+   - For NEW projects, set "suggested_deadline" by looking for date/event hints in the task titles first:
+       * If tasks mention a specific month (e.g. "October", "wedding in October") → use the last day of that month in the nearest future year relative to today.
+       * If tasks mention a specific date or event with a known date → use that date.
+       * If no date hint exists → estimate based on complexity (small: +1 month, medium: +3 months, large: +6 months from today).
+   - Always express suggested_deadline as YYYY-MM-DD. Never leave it null for new projects.
    - Name new projects concisely with the current year (e.g. "Home Renovation 2026", "Job Search 2026").
 
 Return ONLY valid JSON — no markdown, no explanation:

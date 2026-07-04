@@ -514,7 +514,9 @@ def get_tasks_from_notion(chat_id: str) -> list:
             date_prop = props.get("Execution Date", {}).get("date")
             if date_prop:
                 due = date_prop.get("start")
-            tasks.append({"page_id": page["id"], "title": title, "due": due})
+            criticality_select = props.get("Criticality", {}).get("select")
+            criticality = criticality_select.get("name") if criticality_select else None
+            tasks.append({"page_id": page["id"], "title": title, "due": due, "criticality": criticality})
         return tasks
     except Exception as e:
         print(f"❌ Error fetching tasks from Notion: {e}")
