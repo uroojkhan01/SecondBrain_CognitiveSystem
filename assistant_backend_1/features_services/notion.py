@@ -236,28 +236,15 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None, criticality: 
         return False
 
 
-def find_task_in_notion(chat_id: str, title: str, include_done: bool = False) -> str | None:
-    """Search the active tasks database for a page matching title. Returns page_id or None.
-    Set include_done=True to also search tasks already marked done."""
-    token, database_id = get_user_notion_credentials(chat_id)
-    if not token or not database_id:
-        return None
-
-    schema = get_active_database_schema(chat_id)
-    title_col = get_column_name(schema, "title") or "Task Name"
-
-    filter_body = {"property": title_col, "title": {"contains": title}}
+def _search_tasks_db(token: str, tasks_db_id: str, keyword: str, include_done: bool = False) -> list:
+    """Query the Tasks DB for pages whose title contains keyword."""
+    conditions = [{"property": "Task Name", "title": {"contains": keyword}}]
     if not include_done:
-        filter_body = {
-            "and": [
-                {"property": title_col, "title": {"contains": title}},
-                {"property": "Done", "checkbox": {"equals": False}},
-            ]
-        }
-
+        conditions.append({"property": "Done", "checkbox": {"equals": False}})
+    filter_body = {"and": conditions} if len(conditions) > 1 else conditions[0]
     try:
-        response = requests.post(
-            f"https://api.notion.com/v1/databases/{database_id}/query",
+        r = requests.post(
+            f"https://api.notion.com/v1/databases/{tasks_db_id}/query",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -266,20 +253,65 @@ def find_task_in_notion(chat_id: str, title: str, include_done: bool = False) ->
             json={"filter": filter_body},
             timeout=30,
         )
-        results = response.json().get("results", [])
-        if results:
-            return results[0]["id"]
+        return r.json().get("results", [])
     except Exception as e:
-        print(f"❌ Error finding task in Notion: {e}")
+        print(f"❌ _search_tasks_db error: {e}")
+        return []
+
+
+def _find_task_fuzzy(token: str, tasks_db_id: str, title: str, include_done: bool = False) -> str | None:
+    """
+    Find a task page_id by title with word-based fallback matching.
+
+    1. Try the full LLM title as a substring.
+    2. If nothing found, try each significant word (≥5 chars) longest-first
+       until exactly one or more results come back.
+    This handles cases where the LLM reformulates the title
+    (e.g. 'finding a photographer' vs 'Find and book photographer').
+    """
+    # 1. Exact substring attempt
+    results = _search_tasks_db(token, tasks_db_id, title, include_done)
+    if results:
+        return results[0]["id"]
+
+    # 2. Word-based fallback
+    STOP = {"with", "your", "that", "this", "from", "have", "will", "been", "also", "some"}
+    words = [
+        w.strip("'s.,!?\"").lower()
+        for w in title.split()
+        if len(w.strip("'s.,!?\"")) >= 5 and w.lower() not in STOP
+    ]
+    words.sort(key=len, reverse=True)   # most distinctive first
+
+    for word in words:
+        results = _search_tasks_db(token, tasks_db_id, word, include_done)
+        if results:
+            print(f"[fuzzy] matched '{title}' via keyword '{word}'")
+            return results[0]["id"]
+
     return None
+
+
+def find_task_in_notion(chat_id: str, title: str, include_done: bool = False) -> str | None:
+    """Search the Tasks & To Dos database for a page matching title. Returns page_id or None."""
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    token = users.get(str(chat_id), {}).get("notion", {}).get("token")
+    tasks_db_id = users.get(str(chat_id), {}).get("second_brain", {}).get("databases", {}).get("tasks_todos")
+    if not token or not tasks_db_id:
+        return None
+    return _find_task_fuzzy(token, tasks_db_id, title, include_done)
 
 
 def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
     """Set Done = True on the matching task so Master Projects rollup updates."""
-    token, _ = get_user_notion_credentials(chat_id)
-    if not token:
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    token = users.get(str(chat_id), {}).get("notion", {}).get("token")
+    tasks_db_id = users.get(str(chat_id), {}).get("second_brain", {}).get("databases", {}).get("tasks_todos")
+    if not token or not tasks_db_id:
         return False
-    page_id = find_task_in_notion(chat_id, title)
+    page_id = _find_task_fuzzy(token, tasks_db_id, title)
     if not page_id:
         print(f"⚠️ Could not find Notion task to mark done: {title}")
         return False
@@ -307,11 +339,13 @@ def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
 
 def mark_task_undone_in_notion(chat_id: str, title: str) -> bool:
     """Set Done = False on the matching task, reverting an accidental mark-done."""
-    token, _ = get_user_notion_credentials(chat_id)
-    if not token:
+    from assistant_backend_1.helpers import load_users
+    users = load_users()
+    token = users.get(str(chat_id), {}).get("notion", {}).get("token")
+    tasks_db_id = users.get(str(chat_id), {}).get("second_brain", {}).get("databases", {}).get("tasks_todos")
+    if not token or not tasks_db_id:
         return False
-    # find_task_in_notion filters by Done=False by default, so search all pages
-    page_id = find_task_in_notion(chat_id, title, include_done=True)
+    page_id = _find_task_fuzzy(token, tasks_db_id, title, include_done=True)
     if not page_id:
         print(f"⚠️ Could not find Notion task to unmark: {title}")
         return False

@@ -116,8 +116,9 @@ def _save_context(chat_id: str, llm_response: LLMResponse, fallback_summary: str
         save_memory(chat_id, llm_response.memory_summary or fallback_summary, llm_response.entities)
 
 
-def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
-    """Route LLM response to correct save function based on intent."""
+def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str) -> str | None:
+    """Route LLM response to correct save function based on intent.
+    Returns an override reply string if a critical operation failed, otherwise None."""
 
     intent = llm_response.intent
 
@@ -273,19 +274,29 @@ def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str):
         if llm_response.task:
             title = llm_response.task.get("title")
             if not title:
-                return
+                return None
             mark_task_done(chat_id, title)
             mark_reminder_done(chat_id, title)
             hook_mark_task_done(chat_id, title)
-            mark_task_done_in_notion(chat_id, title)
+            success = mark_task_done_in_notion(chat_id, title)
+            if not success:
+                return (
+                    f"Hmm, I couldn't find a task matching '{title}' in your list. "
+                    f"Try /done to pick it directly from your pending tasks!"
+                )
 
     elif intent == "mark_undone":
         if llm_response.task:
             title = llm_response.task.get("title")
             if not title:
-                return
+                return None
             mark_task_pending(chat_id, title)
-            mark_task_undone_in_notion(chat_id, title)
+            success = mark_task_undone_in_notion(chat_id, title)
+            if not success:
+                return (
+                    f"I couldn't find a completed task matching '{title}'. "
+                    f"It may already be pending or the name doesn't match exactly."
+                )
 
     elif intent == "update_project":
         if llm_response.task:
@@ -421,8 +432,8 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
         if llm_response.intent in INTENTS_THAT_SAVE:
             save_or_update_user(chat_id, first_name or "", username or "")
 
-        route_intent(chat_id, llm_response, user_input)
-        return llm_response.reply_to_user
+        override = route_intent(chat_id, llm_response, user_input)
+        return override if override else llm_response.reply_to_user
 
     except json.JSONDecodeError as e:
         print(f"[LLM] JSON parse error: {e}")
