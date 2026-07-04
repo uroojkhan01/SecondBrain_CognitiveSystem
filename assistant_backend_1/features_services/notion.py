@@ -640,6 +640,11 @@ def update_project_in_notion(chat_id: str, project_name: str, new_deadline: str 
     )
     if r.status_code == 200:
         print(f"✅ Project '{project_name}' updated in Notion")
+        try:
+            from assistant_backend_1.features_services.notion_project_details import populate_project_page
+            populate_project_page(token, chat_id, project_page_id)
+        except Exception as e:
+            print(f"⚠️ Could not refresh project page callout after update: {e}")
         return True
     print(f"❌ Failed to update project '{project_name}': {r.json()}")
     return False
