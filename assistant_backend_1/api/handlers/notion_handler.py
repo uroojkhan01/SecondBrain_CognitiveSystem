@@ -5,7 +5,7 @@ from assistant_backend_1.features_services.notion_agent import setup_second_brai
 import asyncio
 from assistant_backend_1.models.db_helpers import save_notion_user_token, save_notion_user_database
 import requests
-from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
+from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI, NOTION_VERSION
 from fastapi.responses import HTMLResponse
 
 
@@ -18,7 +18,7 @@ def fetch_database_schema(token: str, database_id: str) -> dict:
     url = f"https://api.notion.com/v1/databases/{database_id}"
     headers = {
         "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
     try:
         response = requests.get(url, headers=headers)
@@ -83,7 +83,7 @@ async def notion_oauth_callback(request: Request):
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28"
+            "Notion-Version": NOTION_VERSION
         }
     )
 

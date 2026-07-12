@@ -5,6 +5,7 @@ import pytz
 import re
 from datetime import datetime, timedelta
 from assistant_backend_1.models.db import get_user_by_chat_id, get_notion_databases
+from assistant_backend_1.config import NOTION_VERSION
 
 def get_user_notion_credentials(chat_id: str):
     # Token — always read from Postgres (updated on every OAuth)
@@ -66,7 +67,7 @@ def get_notion_workspace_timezone(token: str, database_id: str) -> str:
     url = f"https://api.notion.com/v1/databases/{database_id}"
     headers = {
         "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
     try:
         response = requests.get(url, headers=headers)
@@ -197,7 +198,7 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None, criticality: 
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
 
     props = {
@@ -248,7 +249,7 @@ def _search_tasks_db(token: str, tasks_db_id: str, keyword: str, include_done: b
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"filter": filter_body},
             timeout=30,
@@ -321,7 +322,7 @@ def mark_task_done_in_notion(chat_id: str, title: str) -> bool:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"properties": {"Done": {"checkbox": True}}},
             timeout=30,
@@ -355,7 +356,7 @@ def mark_task_undone_in_notion(chat_id: str, title: str) -> bool:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"properties": {"Done": {"checkbox": False}}},
             timeout=30,
@@ -423,7 +424,7 @@ def update_project_progress(chat_id: str, task_page_id: str) -> None:
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28",
+        "Notion-Version": NOTION_VERSION,
     }
 
     try:
@@ -486,7 +487,7 @@ def sync_all_project_progress(chat_id: str) -> None:
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28",
+        "Notion-Version": NOTION_VERSION,
     }
 
     try:
@@ -535,7 +536,7 @@ def get_tasks_from_notion(chat_id: str) -> list:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={
                 "filter": {
@@ -575,7 +576,7 @@ def mark_task_done_by_page_id(token: str, page_id: str) -> bool:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"properties": {"Done": {"checkbox": True}}},
             timeout=30,
@@ -603,7 +604,7 @@ def delete_task_from_notion(chat_id: str, title: str) -> bool:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"archived": True}
         )
@@ -633,7 +634,7 @@ def update_project_in_notion(chat_id: str, project_name: str, new_deadline: str 
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28",
+        "Notion-Version": NOTION_VERSION,
     }
 
     results = _query_all_pages(headers, master_db_id, {})
@@ -719,7 +720,7 @@ def update_task_in_notion(chat_id: str, title: str, new_title: str = None, new_d
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28",
+                "Notion-Version": NOTION_VERSION,
             },
             json={"properties": props}
         )
@@ -754,7 +755,7 @@ def save_reminder_to_notion(chat_id: str, text: str, remind_at: str = None) -> b
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
 
     props = {

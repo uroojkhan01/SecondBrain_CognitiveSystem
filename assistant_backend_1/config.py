@@ -28,3 +28,6 @@ NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD')
 
 # Feature Flags
 ENABLE_LLM_API = os.getenv('ENABLE_LLM_API', 'false').lower() in ('true', '1', 't')
+
+# Notion API
+NOTION_VERSION = "2022-06-28"

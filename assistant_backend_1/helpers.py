@@ -4,7 +4,7 @@ import requests
 import pytz
 import re
 from datetime import datetime, timedelta
-from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
+from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI, NOTION_VERSION
 
 
 
@@ -112,7 +112,7 @@ def get_notion_workspace_timezone(token: str, database_id: str) -> str:
     url = f"https://api.notion.com/v1/databases/{database_id}"
     headers = {
         "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
     try:
         response = requests.get(url, headers=headers)
@@ -247,7 +247,7 @@ def save_task_to_notion(chat_id: str, title: str, due: str = None) -> bool:
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
 
     # Build props dynamically
@@ -312,7 +312,7 @@ def save_reminder_to_notion(chat_id: str, text: str, remind_at: str = None) -> b
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
+        "Notion-Version": NOTION_VERSION
     }
 
     props = {

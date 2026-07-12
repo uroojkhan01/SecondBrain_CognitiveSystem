@@ -4,7 +4,7 @@ import requests
 from groq import Groq
 import anthropic
 from assistant_backend_1.helpers import load_users, save_users
-from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY
+from assistant_backend_1.config import GROQ_API_KEYS, ANTHROPIC_API_KEY, NOTION_VERSION
 from assistant_backend_1.features_services.notion_schema import (
     AREA_DATABASES, AREA_NAME_TO_KEY,
     AREA_DB_FLAT_SCHEMA, MASTER_PROJECTS_FLAT_SCHEMA, TASKS_FLAT_SCHEMA,
@@ -13,7 +13,6 @@ from assistant_backend_1.features_services.notion_schema import (
 )
 
 NOTION_API = "https://api.notion.com/v1"
-NOTION_VERSION = "2022-06-28"
 
 
 # ── Telegram helper ───────────────────────────────────────────────────────────
