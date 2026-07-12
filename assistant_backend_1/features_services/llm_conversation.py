@@ -44,7 +44,8 @@ INTENTS_TO_SKIP_SAVING = {
     "conversation",
     "seek_advice",
     "daily_brief",
-    "panic_mode"
+    "panic_mode",
+    "switch_database",
 }
 
 # Intents that mean something real is being saved
@@ -75,8 +76,12 @@ Format: YYYY-MM-DDTHH:MM:SS{formatted_offset}
 Example: if user says 3pm tomorrow and today is {now_berlin.strftime('%Y-%m-%d')}, extract: {(now_berlin).strftime('%Y-%m-%d')}T15:00:00{formatted_offset}
 """
 
-    # My Neo4j context
-    context = get_user_context(chat_id)
+    # My Neo4j context — fall back to empty if Neo4j is unavailable
+    try:
+        context = get_user_context(chat_id)
+    except Exception as e:
+        print(f"[Memory] Neo4j unavailable, continuing with empty context: {e}")
+        context = "No previous context available."
     context_block = NEO4J_CONTEXT_PROMPT.format(context=context)
 
     return f"{CLASSIFIER_SYSTEM_PROMPT}{time_block}\n\n{context_block}"
@@ -85,29 +90,32 @@ Example: if user says 3pm tomorrow and today is {now_berlin.strftime('%Y-%m-%d')
 def handle_brain_dump(chat_id: str, items: list):
     """Handle multiple intents extracted from a brain dump."""
     for item in items:
-        intent = item.get("intent")
-        if intent == "create_task" and item.get("task"):
-            title = item["task"].get("title")
-            due = item["task"].get("due")
-            criticality = item["task"].get("criticality")
-            save_task(chat_id, title, due)
-            save_task_to_notion(chat_id, title, due, criticality)
-            hook_save_task(chat_id, item["task"].get(
-                "title"), due_date=item["task"].get("due"))
-        elif intent == "set_reminder" and item.get("reminder"):
-            save_reminder(
-                chat_id,
-                item["reminder"].get("text"),
-                item["reminder"].get("datetime")
-            )
-            hook_save_reminder(chat_id, item["reminder"].get(
-                "text"), remind_at=item["reminder"].get("datetime"))
-        elif intent == "save_memory" and item.get("memory_summary"):
-            save_memory(
-                chat_id,
-                item["memory_summary"],
-                item.get("entities", [])
-            )
+        try:
+            intent = item.get("intent")
+            if intent == "create_task" and item.get("task"):
+                title = item["task"].get("title")
+                due = item["task"].get("due")
+                criticality = item["task"].get("criticality")
+                save_task(chat_id, title, due)
+                save_task_to_notion(chat_id, title, due, criticality)
+                hook_save_task(chat_id, item["task"].get(
+                    "title"), due_date=item["task"].get("due"))
+            elif intent == "set_reminder" and item.get("reminder"):
+                save_reminder(
+                    chat_id,
+                    item["reminder"].get("text"),
+                    item["reminder"].get("datetime")
+                )
+                hook_save_reminder(chat_id, item["reminder"].get(
+                    "text"), remind_at=item["reminder"].get("datetime"))
+            elif intent == "save_memory" and item.get("memory_summary"):
+                save_memory(
+                    chat_id,
+                    item["memory_summary"],
+                    item.get("entities", [])
+                )
+        except Exception as e:
+            print(f"[BrainDump] Failed to process item '{item.get('intent')}': {e}")
 
 
 def _save_context(chat_id: str, llm_response: LLMResponse, fallback_summary: str = ""):
@@ -119,8 +127,18 @@ def _save_context(chat_id: str, llm_response: LLMResponse, fallback_summary: str
 def route_intent(chat_id: str, llm_response: LLMResponse, user_input: str) -> str | None:
     """Route LLM response to correct save function based on intent.
     Returns an override reply string if a critical operation failed, otherwise None."""
+    try:
+        return _route_intent_inner(chat_id, llm_response, user_input)
+    except Exception as e:
+        print(f"[Route] Unexpected error handling intent '{llm_response.intent}': {e}")
+        return None  # Don't override the LLM reply on unexpected route failures
 
+
+def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str) -> str | None:
     intent = llm_response.intent
+
+    if intent == "switch_database":
+        return "__SHOW_DB_LIST__"
 
     if intent in INTENTS_TO_SKIP_SAVING:
         return
@@ -437,7 +455,14 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
 
     except json.JSONDecodeError as e:
         print(f"[LLM] JSON parse error: {e}")
-        return "Sorry, I had trouble understanding that. Could you say it again?"
+        return "I had a small hiccup — try again in a moment!"
     except Exception as e:
+        err = str(e).lower()
         print(f"[LLM] Error: {e}")
-        return "Something went wrong on my end. Please try again!"
+        if any(k in err for k in ("rate limit", "429", "too many request", "quota", "tokens per")):
+            return "I'm a bit overloaded right now — give me a moment and try again! 🙏"
+        if any(k in err for k in ("api key", "authentication", "unauthorized", "invalid key", "credit balance", "billing")):
+            return "I'm having trouble connecting right now. Try again in a bit!"
+        if any(k in err for k in ("timeout", "timed out", "connection", "network")):
+            return "I lost connection for a moment — please try again!"
+        return "Something went wrong on my end. Please try again in a moment!"

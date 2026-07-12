@@ -189,6 +189,16 @@ Classify the user message into one of these intents:
                     "I picked up my son" → mark_done IF pickup task exists, else save_memory
                     If no matching task exists → "save_memory" instead
 
+- "switch_database" → user wants to switch to a different Notion database or see their available databases. Examples:
+                    "switch to tasks database"
+                    "use home database"
+                    "change to finance"
+                    "I want to use a different database"
+                    "show my notion databases"
+                    "which database am I on?"
+                    "change my active db"
+                    → no fields needed — just classify as switch_database
+
 - "update_project" → user wants to update the deadline or status of a project in Master Projects DB. Examples:
                     "set the Rome Trip 2026 deadline to end of October"
                     "push the Home Renovation deadline to December"
