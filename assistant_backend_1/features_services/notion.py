@@ -278,9 +278,9 @@ def _find_task_fuzzy(token: str, tasks_db_id: str, title: str, include_done: boo
     # 2. Word-based fallback
     STOP = {"with", "your", "that", "this", "from", "have", "will", "been", "also", "some"}
     words = [
-        w.strip("'s.,!?\"").lower()
+        re.sub(r"'s$", "", w).strip("'.,!?\"").lower()
         for w in title.split()
-        if len(w.strip("'s.,!?\"")) >= 5 and w.lower() not in STOP
+        if len(re.sub(r"'s$", "", w).strip("'.,!?\"")) >= 5 and w.lower() not in STOP
     ]
     words.sort(key=len, reverse=True)   # most distinctive first
 

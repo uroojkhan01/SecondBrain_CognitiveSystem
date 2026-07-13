@@ -293,9 +293,18 @@ def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str
             title = llm_response.task.get("title")
             if not title:
                 return None
-            mark_task_done(chat_id, title)
-            mark_reminder_done(chat_id, title)
-            hook_mark_task_done(chat_id, title)
+            try:
+                mark_task_done(chat_id, title)
+            except Exception as e:
+                print(f"[mark_done] Neo4j error (non-fatal): {e}")
+            try:
+                mark_reminder_done(chat_id, title)
+            except Exception as e:
+                print(f"[mark_done] Reminder error (non-fatal): {e}")
+            try:
+                hook_mark_task_done(chat_id, title)
+            except Exception as e:
+                print(f"[mark_done] Hook error (non-fatal): {e}")
             success = mark_task_done_in_notion(chat_id, title)
             if not success:
                 return (
@@ -308,7 +317,10 @@ def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str
             title = llm_response.task.get("title")
             if not title:
                 return None
-            mark_task_pending(chat_id, title)
+            try:
+                mark_task_pending(chat_id, title)
+            except Exception as e:
+                print(f"[mark_undone] Neo4j error (non-fatal): {e}")
             success = mark_task_undone_in_notion(chat_id, title)
             if not success:
                 return (
