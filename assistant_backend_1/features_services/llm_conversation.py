@@ -355,8 +355,8 @@ def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str
 
 def process_user_input(chat_id: str, user_input: str, first_name: str, username: str) -> str:
     """
-    Takes user message, runs through Claude (claude-sonnet-4-6) first.
-    If Claude fails, falls back to all Groq API keys in sequence.
+    Takes user message, runs through Groq first.
+    If all Groq keys fail, falls back to Claude (claude-haiku-4-5-20251001).
     Classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
     """
     if chat_id not in conversation_histories:
@@ -372,50 +372,50 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
         used_claude = False
 
         # ─────────────────────────────────────────
-        # STEP 1: Try Claude first
+        # STEP 1: Try all Groq keys first
         # ─────────────────────────────────────────
-        if ANTHROPIC_API_KEY:
+        for api_key in GROQ_API_KEYS:
             try:
-                claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-                claude_response = claude_client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=1024,
+                temp_client = Groq(api_key=api_key)
+                response = temp_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    response_format={"type": "json_object"},
                     temperature=0.2,
-                    system=system_prompt,
-                    messages=history
+                    max_tokens=1024,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *history
+                    ]
                 )
-                raw = claude_response.content[0].text
-                used_claude = True
-                print(f"[LLM] Using Claude (claude-haiku-4-5-20251001)")
+                raw = response.choices[0].message.content
+                print(f"[LLM] Using Groq with key: {str(api_key)[:5]}...")
+                break
             except Exception as e:
-                print(f"[LLM] Claude failed: {e}")
+                print(f"[LLM] Groq key {str(api_key)[:5]}... failed: {e}")
                 last_exception = e
+                continue
 
         # ─────────────────────────────────────────
-        # STEP 2: Claude failed or not configured → try Groq keys
+        # STEP 2: All Groq keys failed → fallback to Claude
         # ─────────────────────────────────────────
         if raw is None:
-            print(f"[LLM] Falling back to Groq...")
-            for api_key in GROQ_API_KEYS:
+            print(f"[LLM] All Groq keys exhausted. Switching to Claude fallback...")
+            if ANTHROPIC_API_KEY:
                 try:
-                    temp_client = Groq(api_key=api_key)
-                    response = temp_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        response_format={"type": "json_object"},
-                        temperature=0.2,
+                    claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+                    claude_response = claude_client.messages.create(
+                        model="claude-haiku-4-5-20251001",
                         max_tokens=1024,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            *history
-                        ]
+                        temperature=0.2,
+                        system=system_prompt,
+                        messages=history
                     )
-                    raw = response.choices[0].message.content
-                    print(f"[LLM] Groq fallback succeeded with key: {str(api_key)[:5]}...")
-                    break
+                    raw = claude_response.content[0].text
+                    used_claude = True
+                    print(f"[LLM] Claude fallback succeeded (claude-haiku-4-5-20251001)")
                 except Exception as e:
-                    print(f"[LLM] Groq key {str(api_key)[:5]}... failed: {e}")
+                    print(f"[LLM] Claude fallback also failed: {e}")
                     last_exception = e
-                    continue
 
         if raw is None:
             if last_exception:
