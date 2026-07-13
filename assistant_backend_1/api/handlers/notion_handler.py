@@ -144,6 +144,16 @@ async def notion_oauth_callback(request: Request):
             </html>
         """)
 
+    # Merge full OAuth database list into user.json — setup_second_brain only
+    # writes Second Brain databases, so extras like "Brainstorm Session" get lost.
+    users = load_users()
+    existing_ids = {db["id"] for db in users[str(chat_id)]["notion"].get("database_ids", [])}
+    for db in database_list:
+        if db["id"] not in existing_ids:
+            users[str(chat_id)]["notion"]["database_ids"].append(db)
+            existing_ids.add(db["id"])
+    save_users(users)
+
     # Reload users — only show databases (not pages) as selectable options
     users = load_users()
     full_db_list = users[str(chat_id)]["notion"]["database_ids"]
