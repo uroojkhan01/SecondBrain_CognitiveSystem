@@ -378,7 +378,7 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
             try:
                 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                 claude_response = claude_client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model="claude-haiku-4-5-20251001",
                     max_tokens=1024,
                     temperature=0.2,
                     system=system_prompt,
@@ -386,7 +386,7 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
                 )
                 raw = claude_response.content[0].text
                 used_claude = True
-                print(f"[LLM] Using Claude (claude-sonnet-4-6)")
+                print(f"[LLM] Using Claude (claude-haiku-4-5-20251001)")
             except Exception as e:
                 print(f"[LLM] Claude failed: {e}")
                 last_exception = e
