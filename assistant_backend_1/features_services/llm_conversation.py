@@ -306,6 +306,11 @@ def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str
             except Exception as e:
                 print(f"[mark_done] Hook error (non-fatal): {e}")
             success = mark_task_done_in_notion(chat_id, title)
+            # Fallback: if LLM extracted a wrong/hallucinated title, retry with
+            # significant words from the raw user message
+            if not success and user_input:
+                print(f"[mark_done] LLM title '{title}' not found — retrying with raw input keywords")
+                success = mark_task_done_in_notion(chat_id, user_input)
             if not success:
                 return (
                     f"Hmm, I couldn't find a task matching '{title}' in your list. "

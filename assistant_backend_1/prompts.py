@@ -282,7 +282,12 @@ Rules:
   ]
 - For "update_memory" — fill entities with the corrected information and fill memory_summary
   with the correction as a complete sentence
-- For "mark_done" — fill task with the title of what was completed
+- For "mark_done" — fill task.title with a description of what the user said they completed
+  in THIS message. Use ONLY words from the user's current message — do NOT recall, guess,
+  or substitute task names from memory or prior context. If the user says "I submitted the
+  fee for winter semester", task.title must reflect "fee winter semester", not some other
+  task you remember. The title is used to search Notion, so accuracy to the user's words
+  is critical.
 - For "habit_track" — fill habit with name and value
 - For "daily_brief" — reply_to_user can say data is being fetched, actual data from DB
 - For "delete_reminder" — fill reminder.text with the reminder the user wants deleted.
