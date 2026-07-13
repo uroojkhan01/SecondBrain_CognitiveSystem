@@ -355,8 +355,8 @@ def _route_intent_inner(chat_id: str, llm_response: LLMResponse, user_input: str
 
 def process_user_input(chat_id: str, user_input: str, first_name: str, username: str) -> str:
     """
-    Takes user message, runs through Groq LLM first.
-    If all Groq API keys fail, switches to Claude as fallback.
+    Takes user message, runs through Claude (claude-sonnet-4-6) first.
+    If Claude fails, falls back to all Groq API keys in sequence.
     Classifies intent, saves to Neo4j + Notion, returns reply for Telegram.
     """
     if chat_id not in conversation_histories:
@@ -367,68 +367,60 @@ def process_user_input(chat_id: str, user_input: str, first_name: str, username:
 
     try:
         system_prompt = build_system_prompt(chat_id)
-        response = None
+        raw = None
         last_exception = None
         used_claude = False
 
         # ─────────────────────────────────────────
-        # STEP 1: Try all Groq API keys first
+        # STEP 1: Try Claude first
         # ─────────────────────────────────────────
-        for api_key in GROQ_API_KEYS:
+        if ANTHROPIC_API_KEY:
             try:
-                temp_client = Groq(api_key=api_key)
-                response = temp_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                    max_tokens=1024,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        *history
-                    ]
-                )
-                print(f"[LLM] Using Groq with key: {str(api_key)[:5]}...")
-                break
-            except Exception as e:
-                print(f"[LLM] Groq key {str(api_key)[:5]}... failed: {e}")
-                last_exception = e
-                continue
-
-        # ─────────────────────────────────────────
-        # STEP 2: All Groq keys failed → fallback to Claude
-        # ─────────────────────────────────────────
-        if response is None:
-            print(f"[LLM] All Groq keys exhausted. Switching to Claude fallback...")
-            try:
-                if not ANTHROPIC_API_KEY:
-                    raise Exception(
-                        "ANTHROPIC_API_KEY not set in environment.")
-
                 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-                # Claude requires system prompt separately, not in messages array
                 claude_response = claude_client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=1024,
                     temperature=0.2,
                     system=system_prompt,
-                    messages=history  # same history format works for Claude
+                    messages=history
                 )
-
-                # Normalize Claude response to match Groq response structure
                 raw = claude_response.content[0].text
                 used_claude = True
-                print(f"[LLM] Claude fallback succeeded.")
+                print(f"[LLM] Using Claude (claude-sonnet-4-6)")
+            except Exception as e:
+                print(f"[LLM] Claude failed: {e}")
+                last_exception = e
 
-            except Exception as claude_error:
-                print(f"[LLM] Claude fallback also failed: {claude_error}")
-                # Both Groq and Claude failed — raise original Groq error
-                if last_exception:
-                    raise last_exception
-                raise Exception("All LLM providers failed.")
-        else:
-            # Groq succeeded — extract raw text normally
-            raw = response.choices[0].message.content
+        # ─────────────────────────────────────────
+        # STEP 2: Claude failed or not configured → try Groq keys
+        # ─────────────────────────────────────────
+        if raw is None:
+            print(f"[LLM] Falling back to Groq...")
+            for api_key in GROQ_API_KEYS:
+                try:
+                    temp_client = Groq(api_key=api_key)
+                    response = temp_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        response_format={"type": "json_object"},
+                        temperature=0.2,
+                        max_tokens=1024,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            *history
+                        ]
+                    )
+                    raw = response.choices[0].message.content
+                    print(f"[LLM] Groq fallback succeeded with key: {str(api_key)[:5]}...")
+                    break
+                except Exception as e:
+                    print(f"[LLM] Groq key {str(api_key)[:5]}... failed: {e}")
+                    last_exception = e
+                    continue
+
+        if raw is None:
+            if last_exception:
+                raise last_exception
+            raise Exception("All LLM providers failed.")
 
         # ─────────────────────────────────────────
         # STEP 3: Parse response (same for both providers)
