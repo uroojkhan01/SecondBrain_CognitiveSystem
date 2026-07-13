@@ -7,6 +7,7 @@ from assistant_backend_1.models.db_helpers import save_notion_user_token, save_n
 import requests
 from assistant_backend_1.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI, NOTION_VERSION
 from fastapi.responses import HTMLResponse
+from assistant_backend_1.api.handlers.telegram_handler import _pending_db_selection
 
 
 # ============================================
@@ -150,6 +151,7 @@ async def notion_oauth_callback(request: Request):
     active_name = next((db["name"] for db in full_db_list if db["id"] == active_id), "Tasks and To Dos")
 
     selectable = [db for db in full_db_list if db["type"] == "database"]
+    _pending_db_selection[str(chat_id)] = selectable
     db_options = "\n".join([
         f"{i+1}. {db['name']}" for i, db in enumerate(selectable)
     ])
